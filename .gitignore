@@ -1,0 +1,12 @@
+logs/
+.venv
+backend/uploads/
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+prompt.db
+.idea/
+.python-version
+data/
+nltk_data/

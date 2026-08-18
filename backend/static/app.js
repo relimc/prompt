@@ -1,0 +1,1289 @@
+document.addEventListener('DOMContentLoaded', function() {
+
+    // ---------- 全局状态 ----------
+    let token = localStorage.getItem('token') || null;
+    let currentCardId = null;
+    let currentWorkflowMenu = null;
+    let currentView = 'waterfall';
+    let pendingAction = null;
+    let waterfallScrollY = 0;
+    let tagCloudScrollY = 0;
+    let isTagClickJump = false; // 是否由标签卡片点击触发跳转
+    let selectedPositive = null;
+    let selectedNegative = null;
+    let currentTagPage = 1;
+    let totalTagPages = 1;
+
+    // ---------- 获取 DOM 元素 ----------
+    const grid = document.getElementById('masonryGrid');
+    const searchInput = document.getElementById('searchInput');
+    const loginModal = document.getElementById('loginModal');
+    const loginUsername = document.getElementById('loginUsername');
+    const loginPassword = document.getElementById('loginPassword');
+    const loginConfirmBtn = document.getElementById('loginConfirmBtn');
+    const loginCancelBtn = document.getElementById('loginCancelBtn');
+    const loginError = document.getElementById('loginError');
+    const editModal = document.getElementById('editModal');
+    const editModalTitle = document.getElementById('editModalTitle');
+    const editForm = document.getElementById('editForm');
+    const editTitle = document.getElementById('editTitle');
+    const editPositive = document.getElementById('editPositive');
+    const editNegative = document.getElementById('editNegative');
+    const editTags = document.getElementById('editTags');
+    const editImage = document.getElementById('editImage');
+    const editWorkflow = document.getElementById('editWorkflow');
+    const editImagePreview = document.getElementById('editImagePreview');
+    const editWorkflowPreview = document.getElementById('editWorkflowPreview');
+    const editCancelBtn = document.getElementById('editCancelBtn');
+    const editDeleteBtn = document.getElementById('editDeleteBtn');
+    const promptModal = document.getElementById('promptModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    const modalCloseBtn = document.getElementById('modalCloseBtn');
+    const waterfallBtn = document.getElementById('waterfallBtn');
+    const tagcloudBtn = document.getElementById('tagcloudBtn');
+
+    // ---------- 提示词备件库 ----------
+    let draftTags = [];
+    const draftTextarea = document.getElementById('draftTextarea');
+    const draftDrawer = document.getElementById('draftDrawer');
+    const draftToggleBtn = document.getElementById('draftToggleBtn');
+    const draftCloseBtn = document.querySelector('.draft-close');
+    const draftClearBtn = document.querySelector('.draft-clear');
+    const draftCopyBtn = document.querySelector('.draft-copy');
+
+    // ---------- 辅助函数 ----------
+    function showToast(msg) {
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: #0f172a; color: white; padding: 10px 28px;
+            border-radius: 40px; font-size: 0.9rem; font-weight: 500;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 1000;
+            transition: opacity 0.3s; opacity: 0;
+        `;
+        toast.textContent = msg;
+        document.body.appendChild(toast);
+        requestAnimationFrame(() => toast.style.opacity = '1');
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('✅ 已复制到剪贴板');
+            }).catch(() => fallbackCopy(text));
+        } else {
+            fallbackCopy(text);
+        }
+    }
+    function fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        showToast('✅ 已复制到剪贴板');
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // ---------- 登录逻辑 ----------
+    function openLoginModal(action) {
+        pendingAction = action || null;
+        loginModal.style.display = 'flex';
+        loginError.textContent = '';
+        loginUsername.value = '';
+        loginPassword.value = '';
+        loginUsername.focus();
+    }
+
+    function closeLoginModal() {
+        loginModal.style.display = 'none';
+        pendingAction = null;
+    }
+
+    if (loginCancelBtn) {
+        loginCancelBtn.addEventListener('click', closeLoginModal);
+    }
+    if (loginModal) {
+        loginModal.addEventListener('click', function(e) {
+            if (e.target === this) closeLoginModal();
+        });
+    }
+
+    if (loginConfirmBtn) {
+        loginConfirmBtn.addEventListener('click', async () => {
+            const username = loginUsername.value.trim();
+            const password = loginPassword.value.trim();
+            if (!username || !password) {
+                loginError.textContent = '请输入用户名和密码';
+                return;
+            }
+            try {
+                const formData = new FormData();
+                formData.append('username', username);
+                formData.append('password', password);
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    token = data.access_token;
+                    localStorage.setItem('token', token);
+                    loginModal.style.display = 'none';
+                    showToast('登录成功');
+                    if (pendingAction) {
+                        const action = pendingAction;
+                        pendingAction = null;
+                        action();
+                    } else {
+                        loadCards();
+                    }
+                } else {
+                    const err = await res.json();
+                    loginError.textContent = err.detail || '登录失败';
+                }
+            } catch (e) {
+                loginError.textContent = '网络错误';
+            }
+        });
+    }
+
+    if (loginPassword) {
+        loginPassword.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') loginConfirmBtn.click();
+        });
+    }
+
+    // ---------- 加载卡片（瀑布流） ----------
+    async function loadCards() {
+        currentView = 'waterfall';
+        const keyword = searchInput.value.trim();
+        let url = '/api/cards?';
+        const params = new URLSearchParams();
+        if (keyword) params.append('keyword', keyword);
+        url += params.toString();
+
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('加载失败');
+            const cards = await res.json();
+            renderCards(cards);
+        } catch (e) {
+            showToast('加载卡片失败');
+            console.error(e);
+        }
+    }
+
+    function renderCards(cards) {
+        if (!cards || !cards.length) {
+            grid.innerHTML = `<div class="empty-state" style="column-span:all; text-align:center; padding:60px 20px; color:#64748b;">🧐 没有找到卡片</div>`;
+            return;
+        }
+        let html = '';
+        cards.forEach(card => {
+            const imgUrl = card.image_path || `https://picsum.photos/seed/${card.id}/400/300`;
+            html += `
+                <div class="card" data-id="${card.id}">
+                    <div class="card-image">
+                        <img src="${imgUrl}" alt="${card.title || '未命名'}" loading="lazy" onerror="this.src='https://picsum.photos/seed/${card.id}/400/300'" />
+                    </div>
+                    <div class="card-overlay">
+                        <div class="card-actions">
+                            <button class="btn-action btn-workflow" data-id="${card.id}">⚙️ 工作流</button>
+                            <button class="btn-action btn-prompt" data-id="${card.id}">📝 提示词</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        grid.innerHTML = html;
+
+        // 恢复瀑布流滚动位置（确保当前视图是瀑布流）    
+        if (currentView === 'waterfall') {        
+            window.scrollTo(0, waterfallScrollY);    
+        }
+    }
+
+    // ---------- 事件委托（卡片交互） ----------
+    if (grid) {
+        grid.addEventListener('click', function(e) {
+            const target = e.target;
+            const cardEl = target.closest('.card');
+            if (!cardEl) return;
+
+            const cardId = parseInt(cardEl.dataset.id);
+            if (isNaN(cardId)) return;
+
+            const isWorkflowBtn = target.closest('.btn-workflow');
+            const isPromptBtn = target.closest('.btn-prompt');
+
+            if (isWorkflowBtn) {
+                e.stopPropagation();
+                handleWorkflow(cardId, cardEl);
+                return;
+            }
+            if (isPromptBtn) {
+                e.stopPropagation();
+                handlePrompt(cardId);
+                return;
+            }
+            openEditModal(cardId);
+        });
+    }
+
+    // ---------- 工作流 & 提示词 ----------
+    async function handleWorkflow(id, triggerEl) {
+        try {
+            const res = await fetch(`/api/cards/${id}`);
+            if (!res.ok) throw new Error('获取失败');
+            const card = await res.json();
+            const hasJson = !!card.workflow_path;
+            const hasImage = !!card.image_path;
+
+            if (hasJson && hasImage) {
+                showWorkflowMenu(card, triggerEl);
+            } else if (hasImage) {
+                const a = document.createElement('a');
+                a.href = card.image_path;
+                const ext = card.image_path.split('.').pop() || 'png';
+                a.download = `workflow_${card.id}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                showToast('🖼️ 图片下载成功，将图片拖进 ComfyUI 即可重现工作流');
+            } else if (hasJson) {
+                const a = document.createElement('a');
+                a.href = card.workflow_path;
+                a.download = `workflow_${card.id}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                showToast('📄 下载工作流 JSON 文件');
+            } else {
+                showToast('该卡片无工作流文件或图片');
+            }
+        } catch (e) {
+            showToast('获取工作流失败');
+            console.error(e);
+        }
+    }
+
+    function showWorkflowMenu(card, triggerEl) {
+        if (currentWorkflowMenu) {
+            currentWorkflowMenu.remove();
+            currentWorkflowMenu = null;
+            document.removeEventListener('click', outsideClickListener);
+        }
+
+        const rect = triggerEl.getBoundingClientRect();
+        const menuWidth = 220;
+        const menuHeight = 150;
+        let left = rect.left + rect.width / 2 - menuWidth / 2;
+        if (left < 20) left = 20;
+        if (left + menuWidth > window.innerWidth - 20) left = window.innerWidth - menuWidth - 20;
+        let top = rect.bottom + 10;
+        if (top + menuHeight > window.innerHeight - 20) {
+            top = rect.top - menuHeight - 10;
+        }
+
+        const menu = document.createElement('div');
+        menu.style.cssText = `
+            position: fixed; top: ${top}px; left: ${left}px;
+            background: white; padding: 20px 24px; border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15); z-index: 1000;
+            min-width: ${menuWidth}px; text-align: center;
+            border: 1px solid #e2e8f0;
+        `;
+        menu.innerHTML = `
+            <h3 style="margin:0 0 16px 0; font-size:1rem; font-weight:600;">选择下载格式</h3>
+            <div style="display:flex; gap:12px; justify-content:center;">
+                <button class="btn-dl-json" style="padding:8px 24px; border:none; border-radius:8px; background:#6366f1; color:white; cursor:pointer;">📄 JSON</button>
+                <button class="btn-dl-png" style="padding:8px 24px; border:none; border-radius:8px; background:#10b981; color:white; cursor:pointer;">🖼️ PNG</button>
+            </div>
+            <button class="btn-dl-cancel" style="margin-top:16px; background:none; border:none; color:#94a3b8; cursor:pointer;">取消</button>
+        `;
+        document.body.appendChild(menu);
+        currentWorkflowMenu = menu;
+
+        function closeMenu() {
+            if (currentWorkflowMenu) {
+                currentWorkflowMenu.remove();
+                currentWorkflowMenu = null;
+                document.removeEventListener('click', outsideClickListener);
+            }
+        }
+
+        function outsideClickListener(e) {
+            if (currentWorkflowMenu && !currentWorkflowMenu.contains(e.target)) {
+                closeMenu();
+            }
+        }
+        setTimeout(() => document.addEventListener('click', outsideClickListener), 10);
+
+        menu.querySelector('.btn-dl-json').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (card.workflow_path) {
+                const a = document.createElement('a');
+                a.href = card.workflow_path;
+                a.download = `workflow_${card.id}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                showToast('📄 下载工作流 JSON 文件');
+            } else showToast('无 JSON 文件');
+            closeMenu();
+        });
+        menu.querySelector('.btn-dl-png').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (card.image_path) {
+                const a = document.createElement('a');
+                a.href = card.image_path;
+                const ext = card.image_path.split('.').pop() || 'png';
+                a.download = `workflow_${card.id}.${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                showToast('🖼️ 图片下载成功，将图片拖进 ComfyUI 即可重现工作流');
+            } else showToast('无图片文件');
+            closeMenu();
+        });
+        menu.querySelector('.btn-dl-cancel').addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); });
+        menu.addEventListener('click', (e) => { if (e.target === menu) closeMenu(); });
+    }
+
+    function handlePrompt(id) {
+        fetch(`/api/cards/${id}`)
+            .then(res => {
+                if (!res.ok) throw new Error('获取卡片失败');
+                return res.json();
+            })
+            .then(card => openPromptModal(card))
+            .catch(err => { showToast('获取提示词失败'); console.error(err); });
+    }
+
+    function openPromptModal(card) {
+        const titleText = card.title ? card.title.trim() : '';
+        if (titleText === '') {
+            modalTitle.style.display = 'none';
+        } else {
+            modalTitle.style.display = 'block';
+            modalTitle.textContent = `📋 ${titleText}`;
+        }
+        const positive = card.positive_prompt || '';
+        const negative = card.negative_prompt || '';
+        const positiveDisplay = escapeHtml(positive);
+        const negativeDisplay = escapeHtml(negative || '（无）');
+        const positiveAttr = positive.replace(/"/g, '&quot;');
+        const negativeAttr = (negative || '').replace(/"/g, '&quot;');
+
+        modalBody.innerHTML = `
+            <div class="prompt-block">
+                <div class="label positive">✅ 正向提示词</div>
+                <div class="content">${positiveDisplay}</div>
+                <button class="copy-prompt-btn" data-text="${positiveAttr}">复制正向词</button>
+            </div>
+            <div class="prompt-block">
+                <div class="label negative">🚫 反向提示词</div>
+                <div class="content">${negativeDisplay}</div>
+                <button class="copy-prompt-btn" data-text="${negativeAttr}">复制反向词</button>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:10px; justify-content:flex-end;">
+                <button class="copy-prompt-btn" data-text="正向提示词：\n${positiveAttr}\n\n反向提示词：\n${negativeAttr}" style="background:#6366f1; color:white; border:none; padding:6px 18px;">📄 复制全部</button>
+            </div>
+        `;
+        promptModal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        modalBody.querySelectorAll('.copy-prompt-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                copyText(this.dataset.text);
+            });
+        });
+    }
+
+    function closePromptModal() {
+        promptModal.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+    if (modalCloseBtn) modalCloseBtn.addEventListener('click', closePromptModal);
+    if (promptModal) promptModal.addEventListener('click', function(e) { if (e.target === this) closePromptModal(); });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && promptModal.style.display === 'flex') closePromptModal();
+    });
+
+    // ---------- 编辑弹窗 ----------
+    function openEditModal(cardId) {
+        if (!token) {
+            openLoginModal(() => openEditModal(cardId));
+            return;
+        }
+        currentCardId = cardId;
+        editImagePreview.innerHTML = '';
+        editWorkflowPreview.innerHTML = '';
+
+        const imageFileNameSpan = document.getElementById('imageFileName');
+        const workflowFileNameSpan = document.getElementById('workflowFileName');
+
+        if (cardId) {
+            editModalTitle.textContent = '编辑卡片';
+            editDeleteBtn.style.display = 'inline-block';
+            fetch(`/api/cards/${cardId}`)
+                .then(res => res.json())
+                .then(card => {
+                    editTitle.value = card.title || '';
+                    editPositive.value = card.positive_prompt;
+                    editNegative.value = card.negative_prompt || '';
+                    editTags.value = card.tags || '';
+
+                    // PNG 格式工作流
+                    if (card.image_path) {
+                        const filename = card.image_path.split('/').pop();
+                        imageFileNameSpan.textContent = filename;
+                        editImagePreview.innerHTML = `<button type="button" onclick="window.open('${card.image_path}', '_blank')" style="background:none; border:1px solid #6366f1; color:#6366f1; padding:4px 12px; border-radius:12px; cursor:pointer; font-size:0.9rem; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看文件</button>`;
+                    } else {
+                        imageFileNameSpan.textContent = '选择文件';
+                        editImagePreview.innerHTML = `<span style="border:1px solid #d1d5db; color:#d1d5db; padding:4px 12px; border-radius:12px; font-size:0.9rem; background:none; cursor:not-allowed; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看文件</span>`;
+                    }
+
+                    // JSON 格式工作流
+                    if (card.workflow_path) {
+                        const filename = card.workflow_path.split('/').pop();
+                        workflowFileNameSpan.textContent = filename;
+                        editWorkflowPreview.innerHTML = `<button type="button" onclick="window.open('${card.workflow_path}', '_blank')" style="background:none; border:1px solid #6366f1; color:#6366f1; padding:4px 12px; border-radius:12px; cursor:pointer; font-size:0.9rem; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看文件</button>`;
+                    } else {
+                        workflowFileNameSpan.textContent = '选择文件';
+                        editWorkflowPreview.innerHTML = `<span style="border:1px solid #d1d5db; color:#d1d5db; padding:4px 12px; border-radius:12px; font-size:0.9rem; background:none; cursor:not-allowed; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看文件</span>`;
+                    }
+
+                    editModal.style.display = 'flex';
+                })
+                .catch(() => showToast('加载卡片失败'));
+        } else {
+            editModalTitle.textContent = '新增卡片';
+            editDeleteBtn.style.display = 'none';
+            editForm.reset();
+            imageFileNameSpan.textContent = '选择文件';
+            workflowFileNameSpan.textContent = '选择文件';
+            editImagePreview.innerHTML = '';
+            editWorkflowPreview.innerHTML = '';
+            editModal.style.display = 'flex';
+        }
+    }
+
+    if (editCancelBtn) {
+        editCancelBtn.addEventListener('click', () => {
+            editModal.style.display = 'none';
+            currentCardId = null;
+        });
+    }
+
+    if (editForm) {
+        editForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            if (!token) {
+                openLoginModal(() => {
+                    // 登录成功后重新触发表单提交
+                    editForm.dispatchEvent(new Event('submit', { cancelable: true }));
+                });
+                return;
+            }
+            const formData = new FormData(this);
+            const url = currentCardId ? `/api/cards/${currentCardId}` : '/api/cards';
+            const method = currentCardId ? 'PUT' : 'POST';
+            try {
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                });
+                if (res.status === 401) {
+                    // token 无效或过期
+                    token = null;
+                    localStorage.removeItem('token');
+                    showToast('登录已过期，请重新登录');
+                    openLoginModal(() => {
+                        // 登录成功后用户需重新打开编辑弹窗
+                    });
+                    // 关闭当前弹窗
+                    editModal.style.display = 'none';
+                    currentCardId = null;
+                    return;
+                }
+                if (res.ok) {
+                    showToast(currentCardId ? '更新成功' : '创建成功');
+                    editModal.style.display = 'none';
+                    currentCardId = null;
+                    loadCards();
+                } else {
+                    const err = await res.json();
+                    showToast('操作失败: ' + (err.detail || ''));
+                }
+            } catch (e) {
+                showToast('网络错误');
+            }
+        });
+    }
+
+    if (editDeleteBtn) {
+        editDeleteBtn.addEventListener('click', async function() {
+            if (!currentCardId) return;
+            if (!token) {
+                openLoginModal(() => {
+                    editDeleteBtn.click(); // 递归触发
+                });
+                return;
+            }
+            if (!confirm('确定要删除这张卡片吗？')) return;
+            try {
+                const res = await fetch(`/api/cards/${currentCardId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    showToast('删除成功');
+                    editModal.style.display = 'none';
+                    currentCardId = null;
+                    loadCards();
+                } else {
+                    showToast('删除失败');
+                }
+            } catch (e) {
+                showToast('网络错误');
+            }
+        });
+    }
+
+    // ---------- 快捷键 ----------
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.altKey && e.key === 'p') {
+            e.preventDefault();
+            if (token) {
+                openEditModal(null);
+            } else {
+                openLoginModal(() => {
+                    openEditModal(null);
+                });
+            }
+        }
+    });
+
+    // ---------- 搜索 ----------
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {    
+            if (currentView === 'waterfall') {        
+                loadCards();    
+            } else if (currentView === 'tagcloud') {      
+                loadTagCloud(); // 重新加载并过滤    
+            }
+        });
+    }
+
+    // ---------- 标签云 ----------
+    async function loadTagCloud(page = 1) {
+        currentTagPage = page;
+        const keyword = searchInput.value.trim();
+        let url = `/api/tags?page=${page}&per_page=72`;
+        if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`;
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('获取标签失败');
+            const data = await res.json();
+            if (data.total_pages > 0 && page > data.total_pages) {
+                // 如果当前页超出总页数，自动跳转到最后一页
+                loadTagCloud(data.total_pages);
+                return;
+            }
+            totalTagPages = data.total_pages || 1;
+            renderTagCloud(data.tags);
+            renderTagPagination(data.page, data.total_pages);
+        } catch (e) {
+            showToast('加载标签云失败');
+            console.error(e);
+        }
+    }
+
+    function renderTagPagination(currentPage, totalPages) {
+        const container = document.getElementById('tagPagination');
+        if (!container) return;
+        if (totalPages <= 1) {
+            container.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+        container.style.display = 'block';
+        let html = `<div style="display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;">`;
+        // 上一页
+        if (currentPage > 1) {
+            html += `<button class="page-btn" data-page="${currentPage - 1}" style="padding:6px 14px;border:1px solid #d1d5db;border-radius:8px;background:white;cursor:pointer;">上一页</button>`;
+        } else {
+            html += `<button class="page-btn" disabled style="padding:6px 14px;border:1px solid #d1d5db;border-radius:8px;background:#f1f4f9;color:#94a3b8;cursor:not-allowed;">上一页</button>`;
+        }
+        // 页码显示
+        html += `<span style="padding:6px 14px;color:#1e293b;">第 ${currentPage} / ${totalPages} 页</span>`;
+        // 下一页
+        if (currentPage < totalPages) {
+            html += `<button class="page-btn" data-page="${currentPage + 1}" style="padding:6px 14px;border:1px solid #d1d5db;border-radius:8px;background:white;cursor:pointer;">下一页</button>`;
+        } else {
+            html += `<button class="page-btn" disabled style="padding:6px 14px;border:1px solid #d1d5db;border-radius:8px;background:#f1f4f9;color:#94a3b8;cursor:not-allowed;">下一页</button>`;
+        }
+        html += `</div>`;
+        container.innerHTML = html;
+
+        // 绑定点击事件
+        container.querySelectorAll('.page-btn:not([disabled])').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const page = parseInt(this.dataset.page);
+                if (!isNaN(page) && page !== currentTagPage) {
+                    loadTagCloud(page);
+                    // 滚动到顶部
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+            });
+        });
+    }
+
+    async function deleteTag(tagId) {
+        if (!token) {
+            openLoginModal(() => {
+                deleteTag(tagId);
+            });
+            return;
+        }
+        // 如果当前在标签云视图，记录滚动位置
+        if (currentView === 'tagcloud') {
+            tagCloudScrollY = window.scrollY;
+        }
+        try {
+            const res = await fetch(`/api/tags/${tagId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                showToast('删除标签成功');
+                if (currentView === 'tagcloud') {
+                    loadTagCloud(); // 重新加载，渲染完成后会恢复滚动位置
+                }
+            } else {
+                const err = await res.json();
+                showToast('删除失败: ' + (err.detail || ''));
+            }
+        } catch (e) {
+            showToast('网络错误');
+            console.error(e);
+        }
+    }
+
+    function addTagToDraft(tagName) {
+        if (!draftTags.includes(tagName)) {
+            draftTags.push(tagName);
+            updateDraftTextarea();
+            showToast(`已添加标签：${tagName}`);
+            // 自动打开抽屉
+            openDraftDrawer();
+        } else {
+            showToast(`标签“${tagName}”已在备件库中`);
+        }
+    }
+
+    function updateDraftTextarea() {
+        draftTextarea.value = draftTags.join(', ');
+    }
+
+    function openDraftDrawer() {
+        draftDrawer.classList.add('open');
+    }
+
+    function closeDraftDrawer() {
+        draftDrawer.classList.remove('open');
+    }
+
+    // 抽屉控制
+    draftToggleBtn.addEventListener('click', () => {
+        if (draftDrawer.classList.contains('open')) {
+            closeDraftDrawer();
+        } else {
+            openDraftDrawer();
+        }
+    });
+    draftCloseBtn.addEventListener('click', closeDraftDrawer);
+    // 点击背景也可关闭（可选）
+    document.addEventListener('click', function(e) {
+        if (draftDrawer.classList.contains('open') && !draftDrawer.contains(e.target) && e.target !== draftToggleBtn) {
+            // 允许点击外部关闭，但不包括触发按钮
+            closeDraftDrawer();
+        }
+    });
+
+    // 清空
+    draftClearBtn.addEventListener('click', () => {
+        if (draftTags.length === 0) return;
+        if (confirm('确定清空备件库吗？')) {
+            draftTags = [];
+            updateDraftTextarea();
+            showToast('已清空');
+        }
+    });
+
+    // 复制
+    draftCopyBtn.addEventListener('click', () => {
+        const text = draftTextarea.value;
+        if (!text) {
+            showToast('备件库为空');
+            return;
+        }
+        copyText(text);
+    });    
+
+    function renderTagCloud(tags) {
+        if (!tags || tags.length === 0) {
+            grid.innerHTML = `<div class="empty-state" style="column-span:all; text-align:center; padding:60px 20px; color:#64748b;">☁️ 暂无标签</div>`;
+            return;
+        }
+
+        let html = '';
+        tags.forEach(tag => {
+            const rotate = (Math.random() - 0.5) * 8;
+            const translateY = (Math.random() - 0.5) * 12;
+            const size = 0.8 + (tag.usage_count / 20) * 0.4;
+            const fontSize = Math.min(size, 1.6);
+
+            let images = tag.images || [];
+            images = [...new Set(images)];
+            const total = images.length;
+
+            let imagesHtml = '';
+            const cardWidth = 340;
+            const cardHeight = 380;
+
+            if (total === 0) {
+                imagesHtml = `<div style="width:300px;height:300px;display:flex;align-items:center;justify-content:center;background:#f1f4f9;border-radius:8px;font-size:3rem;color:#94a3b8;">🎨</div>`;
+            } else if (total === 1) {
+                imagesHtml = `<img src="${images[0]}" style="width:300px;height:300px;object-fit:cover;border-radius:8px;" />`;
+            } else if (total === 2) {
+                imagesHtml = `
+                    <img src="${images[0]}" style="width:300px;height:150px;object-fit:cover;border-radius:8px;" />
+                    <img src="${images[1]}" style="width:300px;height:150px;object-fit:cover;border-radius:8px;" />
+                `;
+            } else if (total === 3) {
+                imagesHtml = `
+                    <div style="display:flex;gap:4px;justify-content:center;width:100%;">
+                        <img src="${images[0]}" style="width:150px;height:150px;object-fit:cover;border-radius:8px;" />
+                        <img src="${images[1]}" style="width:150px;height:150px;object-fit:cover;border-radius:8px;" />
+                    </div>
+                    <img src="${images[2]}" style="width:300px;height:150px;object-fit:cover;border-radius:8px;" />
+                `;
+            } else {
+                const shuffled = [...images].sort(() => Math.random() - 0.5);
+                const selected = shuffled.slice(0, 4);
+                imagesHtml = `
+                    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;width:304px;margin:0 auto;">
+                        ${selected.map(img => `<img src="${img}" style="width:150px;height:150px;object-fit:cover;border-radius:8px;" />`).join('')}
+                    </div>
+                `;
+            }
+
+            html += `
+                <div class="tag-card" style="transform: rotate(${rotate}deg) translateY(${translateY}px); font-size: ${fontSize}rem; width:${cardWidth}px; height:${cardHeight}px; padding:16px; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; position:relative;">
+                    <div class="tag-card-images" style="display:flex; flex-direction:column; gap:4px; align-items:center; justify-content:center; width:100%; flex:1;">
+                        ${imagesHtml}
+                    </div>
+                    <div class="tag-card-name" style="text-align:center;font-weight:600;color:#1e293b;margin-top:8px;">${escapeHtml(tag.name)}</div>
+                    <div class="card-actions-overlay">
+                        <button class="card-action-btn add-btn" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">➕</button>
+                        <button class="card-action-btn delete-btn" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">🗑️</button>  
+                    </div>
+                </div>
+            `;
+        });
+
+        grid.innerHTML = html;
+
+        // 卡片点击事件
+        grid.querySelectorAll('.tag-card').forEach(card => {
+            card.addEventListener('click', function(e) {
+                if (e.target.closest('.card-action-btn')) return;
+                const tagName = this.querySelector('.tag-card-name').textContent;
+                searchInput.value = tagName;
+                isTagClickJump = true; // 标记为标签点击跳转
+                switchView('waterfall');
+            });
+        });
+
+        // 添加按钮
+        grid.querySelectorAll('.add-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const tagName = this.dataset.tagName;
+                addTagToDraft(tagName);
+            });
+        });
+
+        // 删除按钮
+        grid.querySelectorAll('.delete-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const tagId = this.dataset.tagId;
+                const tagName = this.dataset.tagName;
+                if (confirm(`确定要删除标签“${tagName}”吗？`)) {
+                    deleteTag(tagId);
+                }
+            });
+        });
+
+        if (currentView === 'tagcloud') {        
+            window.scrollTo(0, tagCloudScrollY);    
+        }
+    }
+
+    // ---------- 视图切换 ----------
+    function switchView(view) {
+        if (currentView === view) return;
+
+        // 如果切换到标签云，且之前是标签点击跳转，则清空搜索框
+        if (view === 'tagcloud' && isTagClickJump) {
+            searchInput.value = '';
+            isTagClickJump = false;
+        }
+
+        // 记录当前视图滚动位置（切换前）
+        if (currentView === 'waterfall') {
+            waterfallScrollY = window.scrollY;
+        } else if (currentView === 'tagcloud') {
+            tagCloudScrollY = window.scrollY;
+        }
+
+        currentView = view;
+        if (view === 'waterfall') {
+            grid.classList.remove('tagcloud-mode');
+            waterfallBtn.classList.add('active');
+            tagcloudBtn.classList.remove('active');
+            // 隐藏备件库按钮，并关闭抽屉
+            if (draftToggleBtn) {
+                draftToggleBtn.style.display = 'none';
+            }
+            if (draftDrawer.classList.contains('open')) {
+                closeDraftDrawer();
+            }
+            loadCards();
+        } else if (view === 'tagcloud') {
+            grid.classList.add('tagcloud-mode');
+            tagcloudBtn.classList.add('active');
+            waterfallBtn.classList.remove('active');
+            // 显示备件库按钮
+            if (draftToggleBtn) {
+                draftToggleBtn.style.display = 'flex';
+            }
+            loadTagCloud(currentTagPage);
+        }
+    }
+
+    if (waterfallBtn) {
+        waterfallBtn.addEventListener('click', () => switchView('waterfall'));
+    }
+    if (tagcloudBtn) {
+        tagcloudBtn.addEventListener('click', () => switchView('tagcloud'));
+    }
+
+    // ---------- 初始化 ----------
+    loadCards();
+
+    function showCandidateModal(candidates) {
+        selectedPositive = null;
+        selectedNegative = null;
+        const modal = document.getElementById('candidateModal');
+        const list = document.getElementById('candidateList');
+        const actions = document.getElementById('candidateActions');
+        if (!modal || !list || !actions) {
+            console.error('候选模态框元素未找到');
+            return;
+        }
+        list.innerHTML = '';
+        actions.innerHTML = '';
+
+        // ---------- 创建 tooltip 元素 ----------
+        const tooltip = document.createElement('div');
+        tooltip.id = 'candidate-tooltip';
+        tooltip.style.cssText = `
+            position: absolute;
+            background: #1e293b;
+            color: #f1f5f9;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            max-width: 500px;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            z-index: 10000;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            display: none;
+            pointer-events: none;
+            line-height: 1.5;
+            border: 1px solid #334155;
+        `;
+        document.body.appendChild(tooltip);
+
+        // 辅助函数：显示 tooltip
+        function showTooltip(targetEl, text) {
+            const rect = targetEl.getBoundingClientRect();
+            const scrollY = window.scrollY;
+            const scrollX = window.scrollX;
+            // 定位在目标元素下方，并水平居中
+            let top = rect.bottom + 8 + scrollY;
+            let left = rect.left + rect.width / 2 - tooltip.offsetWidth / 2 + scrollX;
+            // 防止溢出右边界
+            if (left + tooltip.offsetWidth > window.innerWidth - 20) {
+                left = window.innerWidth - tooltip.offsetWidth - 20;
+            }
+            if (left < 20) left = 20;
+            // 如果下方空间不足，显示在上方
+            if (top + tooltip.offsetHeight > window.innerHeight + scrollY - 20) {
+                top = rect.top - tooltip.offsetHeight - 8 + scrollY;
+            }
+            tooltip.textContent = text;
+            tooltip.style.display = 'block';
+            tooltip.style.top = top + 'px';
+            tooltip.style.left = left + 'px';
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+        }
+
+        // ---------- 遍历候选 ----------
+        candidates.forEach((text) => {
+            const item = document.createElement('div');
+            item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #f1f4f9;';
+
+            const textSpan = document.createElement('span');
+            const displayText = text.length > 100 ? text.slice(0, 100) + '...' : text;
+            textSpan.textContent = displayText;
+            textSpan.title = text; // 保留 title 作为备选
+            textSpan.style.cssText = 'flex:1;margin-right:12px;word-break:break-all;font-size:0.9rem;cursor:help;';
+
+            // 鼠标悬停显示完整文本
+            textSpan.addEventListener('mouseenter', function(e) {
+                showTooltip(this, this.title);
+            });
+            textSpan.addEventListener('mouseleave', function(e) {
+                hideTooltip();
+            });
+
+            // ... 创建按钮等后续代码不变 ...
+            const btnGroup = document.createElement('div');
+            btnGroup.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+
+            const posBtn = document.createElement('button');
+            posBtn.className = 'btn-primary';
+            posBtn.style.cssText = 'padding:4px 12px;font-size:0.8rem;min-width:80px;';
+            posBtn.dataset.text = text;
+            posBtn.dataset.type = 'positive';
+            posBtn.textContent = '设为正向';
+
+            const negBtn = document.createElement('button');
+            negBtn.className = 'btn-secondary';
+            negBtn.style.cssText = 'padding:4px 12px;font-size:0.8rem;min-width:80px;';
+            negBtn.dataset.text = text;
+            negBtn.dataset.type = 'negative';
+            negBtn.textContent = '设为反向';
+
+            posBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (selectedPositive === text) {
+                    selectedPositive = null;
+                } else {
+                    if (selectedNegative === text) selectedNegative = null;
+                    selectedPositive = text;
+                }
+                updateCandidateButtons();
+            });
+
+            negBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (selectedNegative === text) {
+                    selectedNegative = null;
+                } else {
+                    if (selectedPositive === text) selectedPositive = null;
+                    selectedNegative = text;
+                }
+                updateCandidateButtons();
+            });
+
+            btnGroup.appendChild(posBtn);
+            btnGroup.appendChild(negBtn);
+            item.appendChild(textSpan);
+            item.appendChild(btnGroup);
+            list.appendChild(item);
+        });
+
+        // ---------- 确定/取消按钮 ----------
+        const confirmBtn = document.createElement('button');
+        confirmBtn.textContent = '确定';
+        confirmBtn.className = 'btn-primary';
+        confirmBtn.style.cssText = 'padding:8px 24px;';
+        confirmBtn.addEventListener('click', () => {
+            const positiveInput = document.getElementById('editPositive');
+            const negativeInput = document.getElementById('editNegative');
+            if (selectedPositive) {
+                positiveInput.value = selectedPositive;
+                showToast('✅ 已设置正向提示词');
+            }
+            if (selectedNegative) {
+                negativeInput.value = selectedNegative;
+                showToast('✅ 已设置反向提示词');
+            }
+            if (!selectedPositive && !selectedNegative) {
+                showToast('未选择任何提示词');
+                return;
+            }
+            closeCandidateModal();
+        });
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = '取消';
+        cancelBtn.className = 'btn-secondary';
+        cancelBtn.style.cssText = 'padding:8px 24px;';
+        cancelBtn.addEventListener('click', closeCandidateModal);
+
+        actions.appendChild(confirmBtn);
+        actions.appendChild(cancelBtn);
+
+        // ---------- 更新按钮状态 ----------
+        function updateCandidateButtons() {
+            const allPosBtns = list.querySelectorAll('[data-type="positive"]');
+            const allNegBtns = list.querySelectorAll('[data-type="negative"]');
+            allPosBtns.forEach(btn => {
+                const text = btn.dataset.text;
+                if (selectedPositive === text) {
+                    btn.textContent = '已选正向 ✓';
+                    btn.style.background = '#10b981';
+                    btn.style.borderColor = '#10b981';
+                } else {
+                    btn.textContent = '设为正向';
+                    btn.style.background = '#6366f1';
+                    btn.style.borderColor = '#6366f1';
+                }
+            });
+            allNegBtns.forEach(btn => {
+                const text = btn.dataset.text;
+                if (selectedNegative === text) {
+                    btn.textContent = '已选反向 ✓';
+                    btn.style.background = '#ef4444';
+                    btn.style.borderColor = '#ef4444';
+                } else {
+                    btn.textContent = '设为反向';
+                    btn.style.background = '#e2e8f0';
+                    btn.style.borderColor = '#e2e8f0';
+                }
+            });
+        }
+
+        updateCandidateButtons();
+        modal.style.display = 'flex';
+
+        // 模态框关闭时清理 tooltip
+        const closeHandler = function() {
+            hideTooltip();
+            // 移除事件监听，防止内存泄漏（可选）
+            modal.removeEventListener('click', closeHandler);
+        };
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeHandler();
+            }
+        });
+    }
+
+    function closeCandidateModal() {
+        const modal = document.getElementById('candidateModal');
+        if (modal) modal.style.display = 'none';
+        selectedPositive = null;
+        selectedNegative = null;
+    }
+
+    // 候选模态框点击背景关闭
+    const candidateModal = document.getElementById('candidateModal');
+    if (candidateModal) {
+        candidateModal.addEventListener('click', function(e) {
+            if (e.target === this) closeCandidateModal();
+        });
+    }
+
+    const editWorkflowInput = document.getElementById('editWorkflow');
+    if (editWorkflowInput) {
+        editWorkflowInput.addEventListener('change', function(e) {
+            const file = this.files[0];
+            const fileNameSpan = document.getElementById('workflowFileName');
+            if (file) {
+                fileNameSpan.textContent = file.name;
+            } else {
+                fileNameSpan.textContent = '选择文件';
+            }
+        });
+    }
+
+    // ---------- 图片上传自动提取提示词（延迟绑定，确保元素已加载） ----------
+    setTimeout(() => {
+        // ---------- 图片上传自动提取提示词（保留文件名） ----------
+        const editImageInput = document.getElementById('editImage');
+        if (editImageInput) {
+            let lastFile = null; // 记录上次选择的文件，避免重复提取
+            editImageInput.addEventListener('change', async function(e) {
+                const file = this.files[0];
+                if (!file) return;
+
+                const fileNameSpan = document.getElementById('imageFileName');
+                if (file) {
+                    fileNameSpan.textContent = file.name;
+                } else {
+                    fileNameSpan.textContent = '选择文件';
+                }
+
+                // 如果与上次选择的文件相同，不重复处理
+                if (lastFile && lastFile.name === file.name && lastFile.size === file.size) {
+                    return;
+                }
+                lastFile = file;
+
+                console.log('选择文件:', file.name, file.type);
+
+                if (!file.type.startsWith('image/')) {
+                    showToast('请选择图片文件');
+                    this.value = ''; // 清空错误文件
+                    lastFile = null;
+                    return;
+                }
+
+                const positiveInput = document.getElementById('editPositive');
+                const negativeInput = document.getElementById('editNegative');
+                if (positiveInput.value.trim() || negativeInput.value.trim()) {
+                    if (!confirm('当前已有提示词，是否覆盖？')) {
+                        this.value = ''; // 用户取消，清空选择
+                        lastFile = null;
+                        return;
+                    }
+                }
+
+                showToast('正在提取提示词...');
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const res = await fetch('/api/extract-prompt-from-image', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    console.log('响应状态:', res.status);
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        console.log('提取结果:', data);
+
+                        if (data.candidates && data.candidates.length > 0) {
+                            // 显示候选列表模态框
+                            showCandidateModal(data.candidates);
+                        } else {
+                            showToast('⚠️ 未能提取到提示词，请手动输入');
+                        }
+                        // 保留文件名，不清空 input
+                    } else {
+                        // 错误处理：如果是“不包含工作流信息”，则静默忽略（不显示错误）
+                        let errMsg = '';
+                        let isNoWorkflow = false;
+                        try {
+                            const err = await res.json();
+                            errMsg = err.detail || '';
+                            if (errMsg.includes('不包含工作流信息')) {
+                                isNoWorkflow = true;
+                            }
+                        } catch (_) {}
+                        if (isNoWorkflow) {
+                            // 不显示任何错误提示，用户可继续手动输入
+                            console.log('图片不包含工作流信息，已作为示例图上传');
+                        } else {
+                            showToast('❌ 提取失败: ' + (errMsg || '未知错误'));
+                            console.error('后端错误:', res.status, errMsg);
+                        }
+                    }
+                } catch (err) {
+                    showToast('网络错误，请稍后重试');
+                    console.error('请求异常:', err);
+                    this.value = '';
+                    lastFile = null;
+                }
+            });
+        }
+    }, 200); // 延迟 200ms 确保元素已完全渲染
+
+    // 创建全局 tooltip 元素
+    const tooltipEl = document.createElement('div');
+    tooltipEl.className = 'global-tooltip';
+    document.body.appendChild(tooltipEl);
+
+    // 辅助函数：获取可靠的 DOM 元素
+    function getElement(target) {
+        if (!target) return null;
+        // 如果是元素节点，直接返回
+        if (target.nodeType === Node.ELEMENT_NODE) {
+            return target;
+        }
+        // 如果是文本节点，返回其父元素
+        if (target.nodeType === Node.TEXT_NODE) {
+            return target.parentNode;
+        }
+        // 其他情况（例如 Document、Window）返回 null
+        return null;
+    }
+
+    document.addEventListener('mouseenter', function(e) {
+        const el = getElement(e.target);
+        if (!el) return;
+        const icon = el.closest('.info-icon');
+        if (!icon) return;
+        const text = icon.getAttribute('data-tooltip') || icon.getAttribute('title');
+        if (!text) return;
+        tooltipEl.textContent = text;
+        tooltipEl.classList.add('visible');
+        const rect = icon.getBoundingClientRect();
+        let top = rect.top - tooltipEl.offsetHeight - 8;
+        let left = rect.left + rect.width / 2 - tooltipEl.offsetWidth / 2;
+        if (top < 10) {
+            top = rect.bottom + 8;
+        }
+        if (left < 10) {
+            left = 10;
+        } else if (left + tooltipEl.offsetWidth > window.innerWidth - 10) {
+            left = window.innerWidth - tooltipEl.offsetWidth - 10;
+        }
+        tooltipEl.style.top = top + 'px';
+        tooltipEl.style.left = left + 'px';
+    }, true);
+
+    document.addEventListener('mouseleave', function(e) {
+        const el = getElement(e.target);
+        if (!el) return;
+        const icon = el.closest('.info-icon');
+        if (!icon) return;
+        tooltipEl.classList.remove('visible');
+    }, true);
+
+    // 初始状态为瀑布流，隐藏备件库按钮
+    if (draftToggleBtn) {
+        draftToggleBtn.style.display = 'none';
+    }
+
+
+}); // end DOMContentLoaded

@@ -1,0 +1,38 @@
+# .github/workflows/docker-build-push.yml
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ "main" ]      # 当代码推送到 main 分支时触发
+  pull_request:
+    branches: [ "main" ]      # 当有 PR 合并到 main 分支时触发（可选）
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 登录 Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 3. 设置 Docker Buildx（支持多平台构建）
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 4. 构建并推送镜像
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # 镜像标签，请将 <your-dockerhub-username> 替换为你的 Docker Hub 用户名
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/prompt:latest
+          # 如果需要支持多架构（如 ARM），可启用以下配置
+          # platforms: linux/amd64,linux/arm64
