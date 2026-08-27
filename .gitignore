@@ -10,3 +10,4 @@ prompt.db
 .python-version
 data/
 nltk_data/
+.python-version

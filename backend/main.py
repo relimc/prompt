@@ -7,6 +7,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+from typing import List
+from fastapi import Body
+from pydantic import BaseModel
 
 from backend.config import Config
 from backend.database import init_db
@@ -47,6 +50,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class ModelUpdateRequest(BaseModel):
+    old_name: str
+    new_name: str
+    link: str
 
 # ---------- 鉴权依赖（修正版） ----------
 def get_current_user(authorization: str = Header(None)):
@@ -173,10 +181,163 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"工作流数据格式错误: {str(e)}")
 
-    # ---------- 定义模型文件后缀 ----------
-    MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx'}
+    # ---------- 模型文件后缀（包含 .gguf） ----------
+    MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx', '.gguf'}
 
-    # ---------- 辅助：判断是否为模型文件 ----------
+    # ---------- 辅助函数 ----------
+    def get_model_filename(path: str) -> str:
+        normalized = path.replace('\\', '/')
+        return os.path.basename(normalized)
+
+    def is_model_file(text: str) -> bool:
+        lower = text.lower().strip()
+        return any(lower.endswith(ext) for ext in MODEL_EXTENSIONS)
+
+    def is_guide_text(text: str) -> bool:
+        return text.strip().startswith('Guide:')
+
+    # ---------- 提取候选提示词 ----------
+    candidates = set()
+    def collect_texts(obj):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key in ('text', 'prompt', 'widgets_values'):
+                    if isinstance(value, str) and len(value) > 10:
+                        stripped = value.strip()
+                        if not is_guide_text(stripped) and not is_model_file(stripped):
+                            candidates.add(stripped)
+                    elif isinstance(value, list):
+                        for item in value:
+                            if isinstance(item, str) and len(item) > 10:
+                                stripped = item.strip()
+                                if not is_guide_text(stripped) and not is_model_file(stripped):
+                                    candidates.add(stripped)
+                elif key == 'nodes' and isinstance(value, list):
+                    for node in value:
+                        collect_texts(node)
+                else:
+                    collect_texts(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                collect_texts(item)
+
+    collect_texts(data)
+
+    if not candidates:
+        import re
+        found = re.findall(r'"(.*?)"', workflow_data)
+        for f in found:
+            if len(f) > 20 and (re.search(r'[\u4e00-\u9fff]', f) or re.search(r'[a-zA-Z]{3,}', f)):
+                stripped = f.strip()
+                if not is_guide_text(stripped) and not is_model_file(stripped):
+                    candidates.add(stripped)
+
+    candidates_list = sorted(list(candidates), key=len, reverse=True)
+
+    # ---------- 提取模型文件名（双保险：递归 + 正则） ----------
+    model_names = set()
+
+    # 方式1：递归遍历所有字符串
+    def collect_all_strings(obj):
+        if isinstance(obj, str):
+            if is_model_file(obj):
+                model_names.add(get_model_filename(obj))
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                collect_all_strings(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                collect_all_strings(item)
+
+    collect_all_strings(data)
+
+    # 方式2：正则匹配整个 workflow_data（确保不漏）
+    import re
+    pattern = re.compile(r'([^\s"]+\.(?:safetensors|pth|bin|ckpt|pt|onnx|gguf))', re.IGNORECASE)
+    matches = pattern.findall(workflow_data)
+    for match in matches:
+        norm_name = get_model_filename(match)
+        model_names.add(norm_name)
+
+    # 最终统一规范化（再次确保去除路径）
+    model_names = {get_model_filename(name) for name in model_names}
+
+    # ---------- 自动保存模型链接 ----------
+    if model_names:
+        # 从工作流提取 Markdown 链接
+        link_pattern = re.compile(r'\[([^\]]+\.(?:safetensors|pth|bin|ckpt|pt|onnx|gguf))\]\(([^)]+)\)', re.IGNORECASE)
+        matches = link_pattern.findall(workflow_data)
+        link_map = {}
+        for filename, url in matches:
+            norm_filename = get_model_filename(filename)
+            link_map[norm_filename] = url
+
+        if not link_map:
+            text_pool = []
+            def collect_text(obj):
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if key in ('text', 'widgets_values', 'title', 'content'):
+                            if isinstance(value, str):
+                                text_pool.append(value)
+                            elif isinstance(value, list):
+                                for item in value:
+                                    if isinstance(item, str):
+                                        text_pool.append(item)
+                        else:
+                            collect_text(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        collect_text(item)
+            collect_text(data)
+            full_text = ' '.join(text_pool)
+            matches = link_pattern.findall(full_text)
+            for filename, url in matches:
+                norm_filename = get_model_filename(filename)
+                link_map[norm_filename] = url
+
+        from backend.crud import get_model_link, save_model_link
+        saved_count = 0
+        for model_name in model_names:
+            if model_name in link_map:
+                url = link_map[model_name]
+                existing = get_model_link(model_name)
+                if existing is None or existing.get('link') != url:
+                    save_model_link(model_name, url)
+                    saved_count += 1
+                    logger.info(f"自动保存模型链接: {model_name} -> {url}")
+        if saved_count > 0:
+            logger.info(f"共自动保存 {saved_count} 个模型链接")
+
+    return {"candidates": candidates_list, "models": list(model_names)}
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="只支持图片文件")
+
+    contents = await file.read()
+    try:
+        from PIL import Image
+        import io
+        image = Image.open(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"无法解析图片: {str(e)}")
+
+    workflow_data = image.info.get('workflow') or image.info.get('prompt')
+    if not workflow_data:
+        raise HTTPException(status_code=400, detail="该图片不包含工作流信息")
+
+    try:
+        data = json.loads(workflow_data)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"工作流数据格式错误: {str(e)}")
+
+    # ---------- 模型文件后缀（包含 .gguf） ----------
+    MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx', '.gguf'}
+
+    # ---------- 辅助函数 ----------
+    def get_model_filename(path: str) -> str:
+        normalized = path.replace('\\', '/')
+        return os.path.basename(normalized)
+
     def is_model_file(text: str) -> bool:
         lower = text.lower().strip()
         return any(lower.endswith(ext) for ext in MODEL_EXTENSIONS)
@@ -223,80 +384,23 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
 
     candidates_list = sorted(list(candidates), key=len, reverse=True)
 
-    # ---------- 提取模型文件名及类型 ----------
-    model_info = set()  # (model_name, model_type)
-
-    def infer_kind_from_node_type(node_type: str, path: str) -> str:
-        """根据节点类型和路径判断模型种类"""
-        if node_type in ('UNETLoader', 'ModelLoader', 'CheckpointLoaderSimple'):
-            return 'checkpoint'
-        elif node_type in ('LoraLoaderModelOnly', 'LoraLoader'):
-            return 'lora'
-        elif node_type == 'CLIPLoader':
-            return 'clip'
-        elif node_type == 'VAELoader':
-            return 'vae'
-        else:
-            # 根据路径或文件名启发式判断
-            if 'loras' in path or 'lora' in path.lower():
-                return 'lora'
-            elif 'vae' in path.lower():
-                return 'vae'
-            elif 'text_encoders' in path or 'clip' in path.lower():
-                return 'clip'
-            else:
-                return 'checkpoint'
-
-    def extract_models(obj, current_node_type=None):
-        if isinstance(obj, dict):
-            # 获取节点类型
-            node_type = obj.get('type', current_node_type)
-            # 检查常见键
-            for key in ['model_name', 'unet_name', 'clip_name', 'vae_name', 'model', 'name']:
-                if key in obj and isinstance(obj[key], str):
-                    val = obj[key].strip()
-                    if is_model_file(val):
-                        base = os.path.basename(val)
-                        kind = infer_kind_from_node_type(node_type, val)
-                        model_info.add((base, kind))
-            # 检查 widgets_values
-            if 'widgets_values' in obj and isinstance(obj['widgets_values'], list):
-                for item in obj['widgets_values']:
-                    if isinstance(item, str) and is_model_file(item):
-                        base = os.path.basename(item)
-                        kind = infer_kind_from_node_type(node_type, item)
-                        model_info.add((base, kind))
-            # 递归
-            for value in obj.values():
-                extract_models(value, node_type)
-        elif isinstance(obj, list):
-            for item in obj:
-                extract_models(item, current_node_type)
-
-    extract_models(data)
-
-    # 备选：从 nodes 中提取（兼容旧格式）
-    if not model_info and 'nodes' in data:
-        for node in data['nodes']:
-            node_type = node.get('type', '')
-            if 'widgets_values' in node and isinstance(node['widgets_values'], list):
-                for w in node['widgets_values']:
-                    if isinstance(w, str) and is_model_file(w):
-                        base = os.path.basename(w)
-                        kind = infer_kind_from_node_type(node_type, w)
-                        model_info.add((base, kind))
-
-    # 提取模型名称列表（用于返回）
-    model_names = [name for name, _ in model_info]
+    # ---------- 提取模型文件名（包含 .gguf） ----------
+    model_names = set()
+    import re
+    pattern = re.compile(r'([^\s"]+\.(?:safetensors|pth|bin|ckpt|pt|onnx|gguf))', re.IGNORECASE)
+    matches = pattern.findall(workflow_data)
+    for match in matches:
+        norm_name = get_model_filename(match)
+        model_names.add(norm_name)
 
     # ---------- 自动保存模型链接 ----------
     if model_names:
-        import re
-        pattern = re.compile(r'\[([^\]]+\.(?:safetensors|pth|bin|ckpt|pt|onnx))\]\(([^)]+)\)', re.IGNORECASE)
-        matches = pattern.findall(workflow_data)
+        link_pattern = re.compile(r'\[([^\]]+\.(?:safetensors|pth|bin|ckpt|pt|onnx|gguf))\]\(([^)]+)\)', re.IGNORECASE)
+        matches = link_pattern.findall(workflow_data)
         link_map = {}
         for filename, url in matches:
-            link_map[filename] = url
+            norm_filename = get_model_filename(filename)
+            link_map[norm_filename] = url
 
         if not link_map:
             text_pool = []
@@ -317,9 +421,10 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
                         collect_text(item)
             collect_text(data)
             full_text = ' '.join(text_pool)
-            matches = pattern.findall(full_text)
+            matches = link_pattern.findall(full_text)
             for filename, url in matches:
-                link_map[filename] = url
+                norm_filename = get_model_filename(filename)
+                link_map[norm_filename] = url
 
         from backend.crud import get_model_link, save_model_link
         saved_count = 0
@@ -327,16 +432,101 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
             if model_name in link_map:
                 url = link_map[model_name]
                 existing = get_model_link(model_name)
-                if existing != url:
+                if existing is None or existing.get('link') != url:
                     save_model_link(model_name, url)
                     saved_count += 1
                     logger.info(f"自动保存模型链接: {model_name} -> {url}")
         if saved_count > 0:
             logger.info(f"共自动保存 {saved_count} 个模型链接")
 
-    # 返回模型信息（包含类型）
-    models_with_type = [{"name": name, "type": kind} for name, kind in model_info]
-    return {"candidates": candidates_list, "models": models_with_type}
+    return {"candidates": candidates_list, "models": list(model_names)}
+
+@app.put("/api/cards/{card_id}/models")
+async def update_card_models(card_id: int, models: List[str] = Body(...), token: str = Depends(get_current_user)):
+    """更新卡片的 models 字段"""
+    card = get_card(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="卡片不存在")
+    # 将 models 转为 JSON 字符串存储
+    models_json = json.dumps(models)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE cards SET models = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (models_json, card_id))
+    conn.commit()
+    conn.close()
+    return {"message": "更新成功"}
+
+
+@app.put("/api/cards/{card_id}/models")
+async def update_card_model(
+    card_id: int,
+    req: ModelUpdateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    old_name = req.old_name
+    new_name = req.new_name
+    link = req.link
+    logger.info(f"更新模型: card_id={card_id}, old_name='{old_name}', new_name='{new_name}', link='{link}'")
+    card = get_card(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="卡片不存在")
+    models = json.loads(card['models']) if card.get('models') else []
+    logger.info(f"当前卡片模型列表: {models}")
+    if old_name not in models:
+        # 尝试去除路径后匹配
+        cleaned = old_name.replace('\\', '/').split('/')[-1]
+        if cleaned in models:
+            old_name = cleaned
+            logger.info(f"自动清理 old_name 为: {old_name}")
+        else:
+            raise HTTPException(status_code=404, detail=f"模型名 '{old_name}' 不在卡片列表中")
+    new_models = [new_name if name == old_name else name for name in models]
+    update_card_models(card_id, new_models)
+
+    old_link = get_model_link(old_name)
+    if old_link:
+        link_to_use = link if link else old_link.get('link', '')
+        model_type = old_link.get('type', '未知')
+        delete_model_link(old_name)
+        save_model_link(new_name, link_to_use)
+        if model_type != '未知':
+            update_model_type(new_name, model_type)
+    else:
+        save_model_link(new_name, link)
+
+    return {"message": "更新成功"}
+
+
+@app.put("/api/cards/{card_id}/models")
+async def update_card_model_name(
+    card_id: int,
+    old_name: str = Form(...),
+    new_name: str = Form(...),
+    link: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
+    card = get_card(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="卡片不存在")
+    models = json.loads(card['models']) if card.get('models') else []
+    if old_name not in models:
+        raise HTTPException(status_code=404, detail="模型名不在卡片中")
+
+    new_models = [new_name if name == old_name else name for name in models]
+    update_card_models(card_id, new_models)
+
+    old_link = get_model_link(old_name)
+    if old_link:
+        link_to_use = link if link else old_link.get('link', '')
+        model_type = old_link.get('type', '未知')
+        delete_model_link(old_name)
+        save_model_link(new_name, link_to_use)
+        if model_type != '未知':
+            update_model_type(new_name, model_type)
+    else:
+        save_model_link(new_name, link)
+
+    return {"message": "更新成功"}
 
 @app.get("/api/model-links")
 def get_model_links_endpoint():
@@ -353,7 +543,6 @@ def remove_model_link(model_name: str):
     return {"message": "删除成功"}
 
 def extract_models_from_file_path(file_path: str) -> list:
-    """从图片文件提取模型名称列表"""
     try:
         from PIL import Image
         image = Image.open(file_path)
@@ -361,25 +550,26 @@ def extract_models_from_file_path(file_path: str) -> list:
         if not workflow_data:
             return []
         data = json.loads(workflow_data)
-        MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx'}
+        MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx', '.gguf'}
         model_names = set()
-        def extract_models(obj):
-            if isinstance(obj, dict):
-                for key in ['model_name', 'unet_name', 'clip_name', 'vae_name', 'model', 'name']:
-                    if key in obj and isinstance(obj[key], str):
-                        val = obj[key].strip()
-                        if any(val.endswith(ext) for ext in MODEL_EXTENSIONS):
-                            model_names.add(os.path.basename(val))
-                if 'widgets_values' in obj and isinstance(obj['widgets_values'], list):
-                    for item in obj['widgets_values']:
-                        if isinstance(item, str) and any(item.endswith(ext) for ext in MODEL_EXTENSIONS):
-                            model_names.add(os.path.basename(item))
+        def collect_strings(obj):
+            if isinstance(obj, str):
+                lower = obj.lower().strip()
+                if any(lower.endswith(ext) for ext in MODEL_EXTENSIONS):
+                    model_names.add(os.path.basename(obj.replace('\\', '/')))
+            elif isinstance(obj, dict):
                 for value in obj.values():
-                    extract_models(value)
+                    collect_strings(value)
             elif isinstance(obj, list):
                 for item in obj:
-                    extract_models(item)
-        extract_models(data)
+                    collect_strings(item)
+        collect_strings(data)
+        # 正则备选
+        import re
+        pattern = re.compile(r'([^\s"]+\.(?:safetensors|pth|bin|ckpt|pt|onnx|gguf))', re.IGNORECASE)
+        matches = pattern.findall(workflow_data)
+        for match in matches:
+            model_names.add(os.path.basename(match.replace('\\', '/')))
         return list(model_names)
     except Exception as e:
         logger.warning(f"提取模型失败: {e}")

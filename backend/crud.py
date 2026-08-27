@@ -373,7 +373,15 @@ def save_model_link(model_name: str, link: str):
     conn.commit()
     conn.close()
 
-def delete_model_link(model_name):
+def update_card_models(card_id: int, models: list):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    models_json = json.dumps(models) if models else None
+    cursor.execute('UPDATE cards SET models = ? WHERE id = ?', (models_json, card_id))
+    conn.commit()
+    conn.close()
+
+def delete_model_link(model_name: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM model_links WHERE model_name = ?', (model_name,))
