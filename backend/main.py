@@ -24,6 +24,7 @@ from backend.crud import (
 from backend.auth import create_access_token, verify_token
 from backend.logging_config import logger
 from backend.crud import get_model_links, save_model_link, delete_model_link
+from backend.crud import update_model_type
 
 # ---------- 确保上传目录存在 ----------
 os.makedirs(Config.IMAGE_DIR, exist_ok=True)
@@ -222,48 +223,81 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
 
     candidates_list = sorted(list(candidates), key=len, reverse=True)
 
-    # ---------- 提取模型文件名 ----------
-    model_names = set()
+    # ---------- 提取模型文件名及类型 ----------
+    model_info = set()  # (model_name, model_type)
 
-    def extract_models(obj):
+    def infer_kind_from_node_type(node_type: str, path: str) -> str:
+        """根据节点类型和路径判断模型种类"""
+        if node_type in ('UNETLoader', 'ModelLoader', 'CheckpointLoaderSimple'):
+            return 'checkpoint'
+        elif node_type in ('LoraLoaderModelOnly', 'LoraLoader'):
+            return 'lora'
+        elif node_type == 'CLIPLoader':
+            return 'clip'
+        elif node_type == 'VAELoader':
+            return 'vae'
+        else:
+            # 根据路径或文件名启发式判断
+            if 'loras' in path or 'lora' in path.lower():
+                return 'lora'
+            elif 'vae' in path.lower():
+                return 'vae'
+            elif 'text_encoders' in path or 'clip' in path.lower():
+                return 'clip'
+            else:
+                return 'checkpoint'
+
+    def extract_models(obj, current_node_type=None):
         if isinstance(obj, dict):
+            # 获取节点类型
+            node_type = obj.get('type', current_node_type)
+            # 检查常见键
             for key in ['model_name', 'unet_name', 'clip_name', 'vae_name', 'model', 'name']:
                 if key in obj and isinstance(obj[key], str):
                     val = obj[key].strip()
                     if is_model_file(val):
-                        model_names.add(os.path.basename(val))
+                        base = os.path.basename(val)
+                        kind = infer_kind_from_node_type(node_type, val)
+                        model_info.add((base, kind))
+            # 检查 widgets_values
             if 'widgets_values' in obj and isinstance(obj['widgets_values'], list):
                 for item in obj['widgets_values']:
                     if isinstance(item, str) and is_model_file(item):
-                        model_names.add(os.path.basename(item))
+                        base = os.path.basename(item)
+                        kind = infer_kind_from_node_type(node_type, item)
+                        model_info.add((base, kind))
+            # 递归
             for value in obj.values():
-                extract_models(value)
+                extract_models(value, node_type)
         elif isinstance(obj, list):
             for item in obj:
-                extract_models(item)
+                extract_models(item, current_node_type)
 
     extract_models(data)
 
-    if not model_names and 'nodes' in data:
+    # 备选：从 nodes 中提取（兼容旧格式）
+    if not model_info and 'nodes' in data:
         for node in data['nodes']:
             node_type = node.get('type', '')
-            if any(t in node_type for t in ['Loader', 'UNET', 'CLIP', 'VAE', 'Lora']):
-                if 'widgets_values' in node and isinstance(node['widgets_values'], list):
-                    for w in node['widgets_values']:
-                        if isinstance(w, str) and is_model_file(w):
-                            model_names.add(os.path.basename(w))
+            if 'widgets_values' in node and isinstance(node['widgets_values'], list):
+                for w in node['widgets_values']:
+                    if isinstance(w, str) and is_model_file(w):
+                        base = os.path.basename(w)
+                        kind = infer_kind_from_node_type(node_type, w)
+                        model_info.add((base, kind))
 
-    # ---------- 自动保存模型链接（从全局 workflow_data 提取） ----------
+    # 提取模型名称列表（用于返回）
+    model_names = [name for name, _ in model_info]
+
+    # ---------- 自动保存模型链接 ----------
     if model_names:
         import re
-        # 匹配 Markdown 链接，文件名以模型后缀结尾
         pattern = re.compile(r'\[([^\]]+\.(?:safetensors|pth|bin|ckpt|pt|onnx))\]\(([^)]+)\)', re.IGNORECASE)
         matches = pattern.findall(workflow_data)
         link_map = {}
         for filename, url in matches:
             link_map[filename] = url
 
-        # 如果未找到，再尝试从 nodes 中收集文本
         if not link_map:
             text_pool = []
             def collect_text(obj):
@@ -300,7 +334,9 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
         if saved_count > 0:
             logger.info(f"共自动保存 {saved_count} 个模型链接")
 
-    return {"candidates": candidates_list, "models": list(model_names)}
+    # 返回模型信息（包含类型）
+    models_with_type = [{"name": name, "type": kind} for name, kind in model_info]
+    return {"candidates": candidates_list, "models": models_with_type}
 
 @app.get("/api/model-links")
 def get_model_links_endpoint():
@@ -395,6 +431,24 @@ async def create_card_endpoint(
     )
     logger.info(f"Created card {card_id}")
     return {"id": card_id, "message": "创建成功"}
+
+@app.post("/api/model-links")
+async def set_model_link(
+    model_name: str = Form(...),
+    link: str = Form(...),
+    model_type: Optional[str] = Form(None)
+):
+    save_model_link(model_name, link, model_type)
+    return {"message": "保存成功"}
+
+@app.put("/api/model-links/{model_name}/type")
+async def update_model_type_endpoint(model_name: str, model_type: str = Form(...)):
+    try:
+        update_model_type(model_name, model_type)
+        return {"message": "类型更新成功"}
+    except Exception as e:
+        logger.error(f"更新模型类型失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/cards/{card_id}", dependencies=[Depends(get_current_user)])
 async def update_card_endpoint(

@@ -23,13 +23,11 @@ def init_db():
             image_path TEXT,
             workflow_path TEXT,
             tags TEXT,
-            models TEXT,          -- 存储 JSON 数组
+            models TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
-    # 为已存在的 cards 表添加 models 字段
     cursor.execute("PRAGMA table_info(cards)")
     columns = [row[1] for row in cursor.fetchall()]
     if 'models' not in columns:
@@ -44,8 +42,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
-    # card_tags 关联表
+    # card_tags 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS card_tags (
             card_id INTEGER,
@@ -56,14 +53,20 @@ def init_db():
         )
     ''')
 
-    # model_links 表
+    # model_links 表（含 type 字段）
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS model_links (
             model_name TEXT PRIMARY KEY,
             link TEXT,
+            type TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # 检查并添加 type 列（如果表已存在但无此列）
+    cursor.execute("PRAGMA table_info(model_links)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'type' not in columns:
+        cursor.execute('ALTER TABLE model_links ADD COLUMN type TEXT')
 
     conn.commit()
     conn.close()
