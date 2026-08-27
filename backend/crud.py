@@ -31,10 +31,36 @@ def link_card_tag(card_id: int, tag_id: int):
     conn.commit()
     conn.close()
 
-def sync_card_tags(card_id: int, new_tags: list):
-    """同步卡片标签：先删除旧关联，再添加新关联"""
+def sync_card_tags(card_id: int, manual_tags: list, extracted_tags: list, positive_prompt: str = None):
+    """同步卡片标签：手动标签直接保留（并加入白名单），自动提取标签过滤黑名单，白名单中的词若出现在提示词中则强制添加"""
+    # 获取白名单和黑名单
+    whitelist = get_whitelist()
+    blacklist = get_blacklist()
+
+    # 处理手动标签：加入白名单（去重）
+    manual_set = set(manual_tags)
+    for tag in manual_set:
+        if tag and tag not in whitelist:
+            add_whitelist(tag)
+
+    # 处理自动提取标签：过滤黑名单
+    extracted_set = set(extracted_tags)
+    filtered_extracted = [tag for tag in extracted_set if tag not in blacklist]
+
+    # 初始合并
+    all_tags = set(manual_set) | set(filtered_extracted)
+
+    # 白名单强制添加：如果 positive_prompt 存在，检查白名单中的词是否出现在提示词中
+    if positive_prompt:
+        for wl in whitelist:
+            # 使用简单的包含检测（可改为正则边界匹配）
+            if wl in positive_prompt and wl not in all_tags:
+                all_tags.add(wl)
+
+    # 更新数据库关联
     conn = get_db_connection()
     cursor = conn.cursor()
+    # 删除旧关联
     cursor.execute('SELECT tag_id FROM card_tags WHERE card_id = ?', (card_id,))
     old_tag_ids = [row['tag_id'] for row in cursor.fetchall()]
     for tid in old_tag_ids:
@@ -43,9 +69,11 @@ def sync_card_tags(card_id: int, new_tags: list):
     conn.commit()
     conn.close()
 
-    for tag_name in new_tags:
-        tag_id = get_or_create_tag(tag_name)
-        link_card_tag(card_id, tag_id)
+    # 添加新关联
+    for tag_name in all_tags:
+        if tag_name:
+            tag_id = get_or_create_tag(tag_name)
+            link_card_tag(card_id, tag_id)
 
 # ---------- 卡片 CRUD ----------
 def get_all_cards():
@@ -105,7 +133,13 @@ def get_card(card_id: int):
 
 
 # backend/crud.py
+import json
+from datetime import datetime
+from backend.database import get_db_connection
+from backend.tag_extractor import extract_tags_from_prompt
+
 def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None):
+    """创建卡片，保存 models 为 JSON 字符串，并处理标签"""
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -118,24 +152,20 @@ def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, 
     conn.commit()
     conn.close()
 
-    # 标签处理（与之前相同）
+    # ---------- 处理标签 ----------
     manual_tags = []
     if tags:
         manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
     extracted = []
     if positive_prompt:
         extracted = extract_tags_from_prompt(positive_prompt)
-    all_tags = list(set(manual_tags + extracted))
-    if all_tags:
-        sync_card_tags(card_id, all_tags)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE cards SET tags = ? WHERE id = ?', (','.join(all_tags), card_id))
-        conn.commit()
-        conn.close()
+    # 调用 sync_card_tags，传入 positive_prompt 用于白名单强制添加
+    sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
+
     return card_id
 
 def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None):
+    """更新卡片，同时更新 models 和标签"""
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -153,27 +183,19 @@ def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_pa
     conn.commit()
     conn.close()
 
-    # 标签处理（与之前相同）
     if affected and positive_prompt:
         manual_tags = []
         if tags:
             manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
         extracted = extract_tags_from_prompt(positive_prompt)
-        all_tags = list(set(manual_tags + extracted))
-        if all_tags:
-            sync_card_tags(card_id, all_tags)
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('UPDATE cards SET tags = ? WHERE id = ?', (','.join(all_tags), card_id))
-            conn.commit()
-            conn.close()
-        else:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
-            cursor.execute('UPDATE cards SET tags = NULL WHERE id = ?', (card_id,))
-            conn.commit()
-            conn.close()
+        # 同样传入 positive_prompt
+        sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
+    else:
+        # 如果 positive_prompt 为空，仍需同步手动标签（但通常不会）
+        if tags:
+            manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
+            sync_card_tags(card_id, manual_tags, [], None)
+
     return affected > 0
 
 def delete_card(card_id: int):
@@ -220,7 +242,23 @@ def get_all_tags_with_stats():
 
 
 def delete_tag(tag_id: int):
-    """删除标签及关联"""
+    # 先获取标签名称
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT name FROM tags WHERE id = ?', (tag_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+    tag_name = row['name']
+    conn.close()
+
+    # 检查是否在白名单中
+    whitelist = get_whitelist()
+    if tag_name not in whitelist:
+        add_blacklist(tag_name)
+
+    # 删除标签（原有逻辑）
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM card_tags WHERE tag_id = ?', (tag_id,))
@@ -385,5 +423,50 @@ def delete_model_link(model_name: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM model_links WHERE model_name = ?', (model_name,))
+    conn.commit()
+    conn.close()
+
+
+def get_whitelist():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT keyword FROM tag_whitelist ORDER BY keyword')
+    rows = cursor.fetchall()
+    conn.close()
+    return [row['keyword'] for row in rows]
+
+def get_blacklist():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT keyword FROM tag_blacklist ORDER BY keyword')
+    rows = cursor.fetchall()
+    conn.close()
+    return [row['keyword'] for row in rows]
+
+def add_whitelist(keyword):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO tag_whitelist (keyword) VALUES (?)', (keyword,))
+    conn.commit()
+    conn.close()
+
+def add_blacklist(keyword):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO tag_blacklist (keyword) VALUES (?)', (keyword,))
+    conn.commit()
+    conn.close()
+
+def remove_whitelist(keyword):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM tag_whitelist WHERE keyword = ?', (keyword,))
+    conn.commit()
+    conn.close()
+
+def remove_blacklist(keyword):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM tag_blacklist WHERE keyword = ?', (keyword,))
     conn.commit()
     conn.close()

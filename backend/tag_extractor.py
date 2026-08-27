@@ -2,9 +2,11 @@
 标签提取模块（增强版）
 - 中文：使用 jieba.posseg 过滤词性，只保留名词、动词、形容词
 - 增加停用词和虚词过滤
-- 英文：使用 yake（可配合 nltk 过滤词性）
+- 英文：整体保留短标签（无分隔符且词数≤4），否则使用 yake（top=500）+ 单词拆分，提取所有可能的实词和短语
 - 支持从 JSON 工作流中提取文本
 - 禁止提取负面词、马赛克等无关词汇
+- 标签组合（逗号/分号分隔）直接拆分所有标签，不限制数量
+- 自然语言提取所有名词/动词/形容词，不限制数量（返回全部，去重）
 """
 
 import re
@@ -61,14 +63,15 @@ STOPWORDS = {
     '拒绝', '限制', '不应答',
 }
 
-# ---------- 初始化 yake ----------
-yake_extractor = yake.KeywordExtractor(lan="en", n=2, top=10)
+# ---------- 初始化 yake（top 调至 500，获取更多候选） ----------
+yake_extractor = yake.KeywordExtractor(lan="en", n=2, top=500)
 
 # ---------- 辅助函数 ----------
 def has_chinese(text):
     return bool(re.search(r'[\u4e00-\u9fff]', text))
 
 def _calc_max_tags(text_len: int) -> int:
+    # 此函数仅用于回退方案，主逻辑不再使用
     min_tags = 5
     max_tags = 80
     step_chars = 40
@@ -84,14 +87,11 @@ def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
     if len(prompt) < 3:
         return []
 
-    if max_tags is None:
-        effective_max = _calc_max_tags(len(prompt))
-    else:
-        effective_max = max_tags
+    # ---------- 定义分隔符 ----------
+    separators = [',', '，', ';', '；']
 
     # ---------- 检测是否为标签组合 ----------
     # 按逗号或分号拆分
-    separators = [',', '，', ';', '；']
     parts = [prompt]
     for sep in separators:
         new_parts = []
@@ -104,24 +104,18 @@ def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
         total_len = sum(len(p) for p in parts)
         avg_len = total_len / len(parts)
         if avg_len <= 6:
-            # 标签组合直接返回去重后的列表
+            # 标签组合直接返回所有标签（不限制数量）
             tags = []
             seen = set()
             for p in parts:
-                # 过滤过短或纯数字
                 if len(p) < 2 or p.isdigit() or p in seen:
                     continue
-                # 去除停用词（可选，但标签组合通常保留所有词）
-                # 这里为了灵活性，我们不过滤停用词，但可自定义
                 seen.add(p)
                 tags.append(p)
-            # 限制数量
-            if len(tags) > effective_max:
-                tags = tags[:effective_max]
-            logger.info(f"标签组合直接提取: {tags}")
+            logger.info(f"标签组合提取（全部）: {tags}")
             return tags
 
-    # ---------- 自然语言处理（原有逻辑） ----------
+    # ---------- 自然语言处理 ----------
     # 中文处理
     if has_chinese(prompt):
         try:
@@ -134,34 +128,67 @@ def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
                 if flag in ('n', 'v', 'a'):
                     collected.append(word)
             if collected:
-                counter = Counter(collected)
-                sorted_items = sorted(counter.items(), key=lambda x: (x[1], len(x[0])), reverse=True)
-                tags = [w for w, _ in sorted_items[:effective_max]]
-                logger.info(f"jieba.posseg 提取（名词/动词/形容词）: {tags}")
-                return tags
+                # 去重（保持顺序）
+                seen = set()
+                unique = []
+                for w in collected:
+                    if w not in seen:
+                        seen.add(w)
+                        unique.append(w)
+                logger.info(f"jieba.posseg 提取（名词/动词/形容词，全部）: {unique}")
+                return unique
         except Exception as e:
             logger.error(f"jieba.posseg 提取失败: {e}")
 
-    # 英文处理（保持原有）
-    try:
-        results = yake_extractor.extract_keywords(prompt)
-        candidate_words = [kw.strip() for kw, _ in results if kw.strip() not in STOPWORDS]
-        tags = [kw for kw in candidate_words if kw.lower() not in STOPWORDS and len(kw) > 2]
-        if tags:
-            logger.info(f"yake 提取（英文）: {tags[:effective_max]}")
-            return tags[:effective_max]
-    except Exception as e:
-        logger.error(f"英文提取失败: {e}")
+    # 英文处理
+    else:
+        # 检查是否为短标签：无分隔符，词数 <= 4
+        if not any(sep in prompt for sep in separators):
+            words = prompt.split()
+            if len(words) <= 4:
+                logger.info(f"英文短标签整体保留: [{prompt}]")
+                return [prompt.strip()]
 
-    # 回退词频统计
+        # 提取所有关键词（短语和单词）
+        all_tags = set()
+
+        # 1. yake 提取短语（top 已设为 500）
+        try:
+            results = yake_extractor.extract_keywords(prompt)
+            for kw, score in results:
+                kw = kw.strip()
+                if len(kw) > 2 and kw not in STOPWORDS:
+                    all_tags.add(kw)
+        except Exception as e:
+            logger.error(f"yake 提取失败: {e}")
+
+        # 2. 拆分所有单词，过滤停用词和短词
+        try:
+            words = re.findall(r'\b[a-zA-Z]+\b', prompt)
+            for w in words:
+                w_lower = w.lower()
+                if len(w) >= 2 and w_lower not in STOPWORDS:
+                    all_tags.add(w)
+        except Exception as e:
+            logger.error(f"单词拆分提取失败: {e}")
+
+        if all_tags:
+            unique_tags = list(all_tags)
+            # 按长度和字母顺序排序（可选，但可保持一定顺序）
+            unique_tags.sort(key=lambda x: (len(x), x.lower()))
+            logger.info(f"英文提取（全部，共 {len(unique_tags)} 个）: {unique_tags}")
+            return unique_tags
+
+    # 回退词频统计（可限制数量，防止过度回退时产生过多噪音）
     try:
         words = jieba.lcut(prompt)
         counter = Counter(words)
         filtered = [(w, c) for w, c in counter.items() if len(w) >= 2 and w not in STOPWORDS]
         filtered.sort(key=lambda x: x[1], reverse=True)
+        effective_max = _calc_max_tags(len(prompt))
         tags = [w for w, _ in filtered[:effective_max]]
         if tags:
-            logger.info(f"词频回退提取: {tags}")
+            logger.info(f"词频回退提取（限制 {effective_max} 个）: {tags}")
             return tags
     except Exception as e:
         logger.error(f"回退失败: {e}")
@@ -174,7 +201,7 @@ def extract_from_json(json_str: str, topK: int = None, include_negative: bool = 
         data = json.loads(json_str)
     except json.JSONDecodeError:
         logger.warning("JSON 解析失败，降级为纯文本")
-        return extract_tags_from_prompt(json_str, topK)
+        return extract_tags_from_prompt(json_str)
 
     text_pool = []
 
@@ -217,4 +244,4 @@ def extract_from_json(json_str: str, topK: int = None, include_negative: bool = 
     if len(full_text) > 2000:
         full_text = full_text[:2000]
 
-    return extract_tags_from_prompt(full_text, topK)
+    return extract_tags_from_prompt(full_text)

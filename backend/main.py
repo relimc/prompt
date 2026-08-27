@@ -28,6 +28,7 @@ from backend.auth import create_access_token, verify_token
 from backend.logging_config import logger
 from backend.crud import get_model_links, save_model_link, delete_model_link
 from backend.crud import update_model_type
+from backend.crud import get_whitelist, get_blacklist, add_whitelist, add_blacklist, remove_whitelist, remove_blacklist
 
 # ---------- 确保上传目录存在 ----------
 os.makedirs(Config.IMAGE_DIR, exist_ok=True)
@@ -700,3 +701,31 @@ async def update_card_endpoint(
         raise HTTPException(status_code=404, detail="更新失败")
     logger.info(f"Updated card {card_id}")
     return {"message": "更新成功"}
+
+@app.get("/api/tag-lists/whitelist")
+def get_whitelist_endpoint():
+    return get_whitelist()
+
+@app.get("/api/tag-lists/blacklist")
+def get_blacklist_endpoint():
+    return get_blacklist()
+
+@app.delete("/api/tag-lists/whitelist/{keyword}")
+def remove_whitelist_endpoint(keyword: str):
+    remove_whitelist(keyword)
+    return {"message": "移除成功"}
+
+@app.delete("/api/tag-lists/blacklist/{keyword}")
+def remove_blacklist_endpoint(keyword: str):
+    remove_blacklist(keyword)
+    return {"message": "移除成功"}
+
+@app.post("/api/tag-lists/whitelist")
+def add_whitelist_endpoint(keyword: str = Form(...)):
+    add_whitelist(keyword.strip())
+    return {"message": "添加成功"}
+
+@app.post("/api/tag-lists/blacklist")
+def add_blacklist_endpoint(keyword: str = Form(...)):
+    add_blacklist(keyword.strip())
+    return {"message": "添加成功"}

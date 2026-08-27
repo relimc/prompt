@@ -31,6 +31,32 @@
             <!-- 由 JS 动态生成 -->
         </div>
 
+        <!-- 黑白名单抽屉（左侧） -->
+        <div id="listDrawer" class="list-drawer">
+            <div class="list-header">
+                <span>📋 标签名单库</span>
+                <button class="list-close">✕</button>
+            </div>
+            <div class="list-body">
+                <div class="list-section">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <h4 style="margin:0;color:#059669;">白名单</h4>
+                        <button class="add-list-btn" data-type="whitelist" style="background:none;border:1px solid #059669;color:#059669;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:1.2rem;display:flex;align-items:center;justify-content:center;">+</button>
+                    </div>
+                    <div id="whitelistContainer" style="display:flex;flex-wrap:wrap;gap:6px;min-height:40px;"></div>
+                </div>
+                <div class="list-section" style="margin-top:16px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <h4 style="margin:0;color:#dc2626;">黑名单</h4>
+                        <button class="add-list-btn" data-type="blacklist" style="background:none;border:1px solid #dc2626;color:#dc2626;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:1.2rem;display:flex;align-items:center;justify-content:center;">+</button>
+                    </div>
+                    <div id="blacklistContainer" style="display:flex;flex-wrap:wrap;gap:6px;min-height:40px;"></div>
+                </div>
+            </div>
+        </div>
+        <!-- 名单库触发按钮 -->
+        <button id="listToggleBtn" class="list-toggle-btn">📋</button>        
+
         <!-- 提示词备件库抽屉 -->
         <div id="draftDrawer" class="draft-drawer">
             <div class="draft-header">

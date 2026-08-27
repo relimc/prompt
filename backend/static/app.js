@@ -1199,26 +1199,36 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         currentView = view;
+        const pagination = document.getElementById('tagPagination');
+        const draftToggleBtn = document.getElementById('draftToggleBtn');
+        const listToggleBtn = document.getElementById('listToggleBtn');
+        const draftDrawer = document.getElementById('draftDrawer');
+        const listDrawer = document.getElementById('listDrawer');
+
         if (view === 'waterfall') {
             grid.classList.remove('tagcloud-mode');
             waterfallBtn.classList.add('active');
             tagcloudBtn.classList.remove('active');
-            // 隐藏备件库按钮，并关闭抽屉
-            if (draftToggleBtn) {
-                draftToggleBtn.style.display = 'none';
-            }
-            if (draftDrawer.classList.contains('open')) {
+            if (pagination) pagination.style.display = 'none';
+            // 隐藏备件库和名单库按钮
+            if (draftToggleBtn) draftToggleBtn.style.display = 'none';
+            if (listToggleBtn) listToggleBtn.style.display = 'none';
+            // 关闭可能打开的抽屉
+            if (draftDrawer && draftDrawer.classList.contains('open')) {
                 closeDraftDrawer();
+            }
+            if (listDrawer && listDrawer.classList.contains('open')) {
+                closeListDrawer();
             }
             loadCards();
         } else if (view === 'tagcloud') {
             grid.classList.add('tagcloud-mode');
             tagcloudBtn.classList.add('active');
             waterfallBtn.classList.remove('active');
-            // 显示备件库按钮
-            if (draftToggleBtn) {
-                draftToggleBtn.style.display = 'flex';
-            }
+            if (pagination) pagination.style.display = 'block';
+            // 显示备件库和名单库按钮
+            if (draftToggleBtn) draftToggleBtn.style.display = 'flex';
+            if (listToggleBtn) listToggleBtn.style.display = 'flex';
             loadTagCloud(currentTagPage);
         }
     }
@@ -1232,6 +1242,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ---------- 初始化 ----------
     loadCards();
+
+    // 初始状态为瀑布流，隐藏分页控件
+    const pagination = document.getElementById('tagPagination');
+    if (pagination) pagination.style.display = 'none';    
 
     function showCandidateModal(candidates) {
         selectedPositive = null;
@@ -1614,10 +1628,141 @@ document.addEventListener('DOMContentLoaded', function() {
         tooltipEl.classList.remove('visible');
     }, true);
 
-    // 初始状态为瀑布流，隐藏备件库按钮
-    if (draftToggleBtn) {
-        draftToggleBtn.style.display = 'none';
+    // ---------- 黑白名单抽屉 ----------
+    const listDrawer = document.getElementById('listDrawer');
+    const listToggleBtn = document.getElementById('listToggleBtn');
+    const listCloseBtn = document.querySelector('.list-close');
+    const whitelistContainer = document.getElementById('whitelistContainer');
+    const blacklistContainer = document.getElementById('blacklistContainer');
+
+    function openListDrawer() {
+        listDrawer.classList.add('open');
+        loadTagLists();
     }
+
+    function closeListDrawer() {
+        listDrawer.classList.remove('open');
+    }
+
+    listToggleBtn.addEventListener('click', () => {
+        if (listDrawer.classList.contains('open')) {
+            closeListDrawer();
+        } else {
+            openListDrawer();
+        }
+    });
+    listCloseBtn.addEventListener('click', closeListDrawer);
+
+    document.addEventListener('click', function(e) {
+        if (listDrawer.classList.contains('open') && !listDrawer.contains(e.target) && e.target !== listToggleBtn) {
+            closeListDrawer();
+        }
+    });
+
+    async function loadTagLists() {
+        try {
+            const [whiteRes, blackRes] = await Promise.all([
+                fetch('/api/tag-lists/whitelist'),
+                fetch('/api/tag-lists/blacklist')
+            ]);
+            const whitelist = await whiteRes.json();
+            const blacklist = await blackRes.json();
+            renderTagList(whitelistContainer, whitelist, 'whitelist');
+            renderTagList(blacklistContainer, blacklist, 'blacklist');
+        } catch (e) {
+            console.error('加载名单库失败', e);
+        }
+    }
+
+    function renderTagList(container, keywords, type) {
+        container.innerHTML = '';
+        if (!keywords || keywords.length === 0) {
+            container.innerHTML = '<span style="color:#94a3b8;font-size:0.9rem;">暂无</span>';
+        } else {
+            keywords.forEach(keyword => {
+                const item = document.createElement('span');
+                item.className = 'list-item';
+                item.innerHTML = `${keyword} <button class="remove-btn" data-keyword="${keyword}" data-type="${type}">✕</button>`;
+                container.appendChild(item);
+            });
+        }
+        // 添加 "+" 按钮
+        const addBtn = document.createElement('button');
+        addBtn.className = 'list-add-btn';
+        addBtn.textContent = '+';
+        addBtn.style.cssText = `
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            width:28px;
+            height:28px;
+            border-radius:50%;
+            background:#e2e8f0;
+            border:none;
+            color:#1e293b;
+            font-size:1.2rem;
+            cursor:pointer;
+            margin-left:4px;
+        `;
+        addBtn.title = `添加${type === 'whitelist' ? '白名单' : '黑名单'}`;
+        addBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const keyword = prompt(`请输入要添加的${type === 'whitelist' ? '白名单' : '黑名单'}关键词：`);
+            if (keyword && keyword.trim()) {
+                addTagList(keyword.trim(), type);
+            }
+        });
+        container.appendChild(addBtn);
+    }
+
+    async function addTagList(keyword, type) {
+        try {
+            const url = type === 'whitelist' ? '/api/tag-lists/whitelist' : '/api/tag-lists/blacklist';
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keyword })
+            });
+            if (res.ok) {
+                showToast('添加成功');
+                loadTagLists();
+            } else {
+                showToast('添加失败');
+            }
+        } catch (e) {
+            showToast('网络错误');
+        }
+    }
+
+    // 初始状态为瀑布流，隐藏备件库按钮
+    if (draftToggleBtn) draftToggleBtn.style.display = 'none';
+    if (listToggleBtn) listToggleBtn.style.display = 'none';
+
+    // ---------- 绑定“+”按钮（快速添加名单） ----------
+    document.querySelectorAll('.add-list-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const type = this.dataset.type; // 'whitelist' 或 'blacklist'
+            const keyword = prompt(`请输入要添加到${type === 'whitelist' ? '白' : '黑'}名单的关键词：`);
+            if (!keyword || keyword.trim() === '') return;
+            const trimmed = keyword.trim();
+            // 调用 API 添加
+            const url = type === 'whitelist' ? '/api/tag-lists/whitelist' : '/api/tag-lists/blacklist';
+            const formData = new FormData();
+            formData.append('keyword', trimmed);
+            fetch(url, {
+                method: 'POST',
+                body: formData
+            }).then(res => {
+                if (res.ok) {
+                    showToast('添加成功');
+                    loadTagLists(); // 刷新名单库
+                } else {
+                    showToast('添加失败');
+                }
+            }).catch(() => showToast('网络错误'));
+        });
+    });    
+
 
 
 }); // end DOMContentLoaded

@@ -68,6 +68,20 @@ def init_db():
     if 'type' not in columns:
         cursor.execute('ALTER TABLE model_links ADD COLUMN type TEXT')
 
+    # 在 init_db 中添加
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tag_whitelist (
+            keyword TEXT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tag_blacklist (
+            keyword TEXT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
 

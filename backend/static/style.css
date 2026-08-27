@@ -718,3 +718,98 @@ body {
     color: #94a3b8;
     cursor: not-allowed;
 }
+
+/* 左侧名单库抽屉 */
+.list-drawer {
+    position: fixed;
+    top: 0;
+    left: -420px;
+    width: 400px;
+    height: 100vh;
+    background: white;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.15);
+    transition: left 0.3s ease;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #e2e8f0;
+}
+.list-drawer.open {
+    left: 0;
+}
+.list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid #e2e8f0;
+    font-weight: 600;
+    font-size: 1.1rem;
+    background: #f8fafc;
+}
+.list-header span {
+    color: #1e293b;
+}
+.list-close {
+    background: none;
+    border: none;
+    font-size: 1.4rem;
+    cursor: pointer;
+    color: #94a3b8;
+}
+.list-close:hover {
+    color: #1e293b;
+}
+.list-body {
+    flex: 1;
+    padding: 16px 24px;
+    overflow-y: auto;
+}
+.list-section {
+    margin-bottom: 20px;
+}
+.list-item {
+    display: inline-flex;
+    align-items: center;
+    background: #f1f4f9;
+    padding: 4px 8px 4px 12px;
+    border-radius: 16px;
+    font-size: 0.85rem;
+    color: #1e293b;
+    margin: 4px 4px 0 0;
+}
+.list-item .remove-btn {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 1rem;
+    margin-left: 4px;
+    padding: 0 2px;
+}
+.list-item .remove-btn:hover {
+    color: #ef4444;
+}
+.list-toggle-btn {
+    position: fixed;
+    left: 20px;
+    bottom: 100px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: #6366f1;
+    color: white;
+    border: none;
+    font-size: 1.4rem;
+    box-shadow: 0 4px 16px rgba(99,102,241,0.4);
+    cursor: pointer;
+    transition: all 0.2s;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.list-toggle-btn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 6px 24px rgba(99,102,241,0.5);
+}
