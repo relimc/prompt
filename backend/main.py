@@ -23,6 +23,7 @@ from backend.crud import (
 )
 from backend.auth import create_access_token, verify_token
 from backend.logging_config import logger
+from backend.crud import get_model_links, save_model_link, delete_model_link
 
 # ---------- 确保上传目录存在 ----------
 os.makedirs(Config.IMAGE_DIR, exist_ok=True)
@@ -272,20 +273,21 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"工作流数据格式错误: {str(e)}")
 
-    # 收集所有候选提示词文本
+    # ---------- 提取候选提示词 ----------
     candidates = set()
-
     def collect_texts(obj):
         if isinstance(obj, dict):
             for key, value in obj.items():
-                # 检查常见 key
-                if key in ['text', 'prompt', 'widgets_values']:
+                if key in ('text', 'prompt', 'widgets_values'):
                     if isinstance(value, str) and len(value) > 10:
                         candidates.add(value.strip())
                     elif isinstance(value, list):
                         for item in value:
                             if isinstance(item, str) and len(item) > 10:
                                 candidates.add(item.strip())
+                elif key == 'nodes' and isinstance(value, list):
+                    for node in value:
+                        collect_texts(node)
                 else:
                     collect_texts(value)
         elif isinstance(obj, list):
@@ -294,19 +296,42 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
 
     collect_texts(data)
 
-    # 如果 candidates 为空，尝试从字符串中提取所有含中文或英文的文本（降级）
+    # 如果 candidates 为空，降级正则提取
     if not candidates:
         import re
-        # 查找所有引号内的字符串
         found = re.findall(r'"(.*?)"', workflow_data)
         for f in found:
             if len(f) > 20 and (re.search(r'[\u4e00-\u9fff]', f) or re.search(r'[a-zA-Z]{3,}', f)):
                 candidates.add(f)
 
-    # 转为列表并排序（按长度降序，更可能是提示词）
     candidates_list = sorted(list(candidates), key=len, reverse=True)
 
-    if not candidates_list:
-        raise HTTPException(status_code=400, detail="未能提取到任何提示词文本")
+    # ---------- 提取模型文件名 ----------
+    model_names = set()
+    nodes = data.get('nodes', [])
+    for node in nodes:
+        node_type = node.get('type')
+        if node_type in ('UNETLoader', 'CLIPLoader', 'VAELoader', 'LoraLoaderModelOnly'):
+            widgets = node.get('widgets_values', [])
+            if widgets and isinstance(widgets, list) and len(widgets) > 0:
+                name = widgets[0]
+                if name and isinstance(name, str):
+                    # 取文件名（去掉路径）
+                    base = os.path.basename(name)
+                    model_names.add(base)
 
-    return {"candidates": candidates_list}
+    return {"candidates": candidates_list, "models": list(model_names)}
+
+@app.get("/api/model-links")
+def get_model_links_endpoint():
+    return get_model_links()
+
+@app.post("/api/model-links")
+def set_model_link(model_name: str = Form(...), link: str = Form(...)):
+    save_model_link(model_name, link)
+    return {"message": "保存成功"}
+
+@app.delete("/api/model-links/{model_name}")
+def remove_model_link(model_name: str):
+    delete_model_link(model_name)
+    return {"message": "删除成功"}

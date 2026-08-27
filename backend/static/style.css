@@ -172,6 +172,7 @@ body {
     display: flex;
     gap: 10px;
     width: 100%;
+    justify-content: center;  /* 新增：使按钮整体居中 */
 }
 .btn-action {
     padding: 7px 16px;

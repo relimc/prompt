@@ -273,3 +273,28 @@ def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
         del item['image_paths']
         result.append(item)
     return result, total
+
+def get_model_links():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT model_name, link FROM model_links ORDER BY model_name')
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+def save_model_link(model_name, link):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO model_links (model_name, link, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+    ''', (model_name, link))
+    conn.commit()
+    conn.close()
+
+def delete_model_link(model_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM model_links WHERE model_name = ?', (model_name,))
+    conn.commit()
+    conn.close()

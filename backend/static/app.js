@@ -186,6 +186,77 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    async function handleModels(cardId) {
+        try {
+            const res = await fetch(`/api/cards/${cardId}`);
+            if (!res.ok) throw new Error('获取卡片失败');
+            const card = await res.json();
+            let models = card.models ? JSON.parse(card.models) : [];
+            if (!models || models.length === 0) {
+                showToast('该卡片暂无模型信息');
+                return;
+            }
+            // 获取模型链接
+            const linkRes = await fetch('/api/model-links');
+            const links = await linkRes.json();
+            const linkMap = {};
+            links.forEach(item => linkMap[item.model_name] = item.link);
+
+            // 弹窗展示模型列表
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.style.display = 'flex';
+            modal.innerHTML = `
+                <div class="modal-box" style="max-width:600px;">
+                    <h2 style="text-align:center;margin-bottom:16px;">🧠 大模型列表</h2>
+                    <div id="modelList" style="max-height:400px;overflow-y:auto;">
+                        ${models.map(name => `
+                            <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f1f4f9;">
+                                <span style="flex:1;font-weight:500;">${name}</span>
+                                ${linkMap[name] ? `<a href="${linkMap[name]}" target="_blank" style="color:#6366f1;text-decoration:underline;">访问链接</a>` : `<input type="text" placeholder="输入链接" data-model="${name}" style="flex:1;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;">`}
+                                <button class="btn-save-link" data-model="${name}" style="background:#6366f1;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">保存</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+                        <button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // 绑定保存按钮
+            modal.querySelectorAll('.btn-save-link').forEach(btn => {
+                btn.addEventListener('click', async function() {
+                    const modelName = this.dataset.model;
+                    const input = this.parentElement.querySelector('input[type="text"]');
+                    const link = input ? input.value.trim() : '';
+                    if (!link) {
+                        showToast('请输入链接');
+                        return;
+                    }
+                    const formData = new FormData();
+                    formData.append('model_name', modelName);
+                    formData.append('link', link);
+                    const res = await fetch('/api/model-links', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (res.ok) {
+                        showToast('保存成功');
+                        // 刷新当前弹窗
+                        handleModels(cardId);
+                    } else {
+                        showToast('保存失败');
+                    }
+                });
+            });
+        } catch (e) {
+            showToast('获取模型信息失败');
+            console.error(e);
+        }
+    }
+
     function renderCards(cards) {
         if (!cards || !cards.length) {
             grid.innerHTML = `<div class="empty-state" style="column-span:all; text-align:center; padding:60px 20px; color:#64748b;">🧐 没有找到卡片</div>`;
@@ -203,6 +274,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <div class="card-actions">
                             <button class="btn-action btn-workflow" data-id="${card.id}">⚙️ 工作流</button>
                             <button class="btn-action btn-prompt" data-id="${card.id}">📝 提示词</button>
+                            <button class="btn-action btn-models" data-id="${card.id}">🧠 大模型</button>
                         </div>
                     </div>
                 </div>
@@ -214,6 +286,15 @@ document.addEventListener('DOMContentLoaded', function() {
         if (currentView === 'waterfall') {        
             window.scrollTo(0, waterfallScrollY);    
         }
+
+        grid.querySelectorAll('.btn-models').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const id = parseInt(this.dataset.id);
+                handleModels(id);
+            });
+        });
+
     }
 
     // ---------- 事件委托（卡片交互） ----------

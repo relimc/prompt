@@ -89,27 +89,52 @@ def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
     else:
         effective_max = max_tags
 
-    # ----- 中文处理 -----
+    # ---------- 检测是否为标签组合 ----------
+    # 按逗号或分号拆分
+    separators = [',', '，', ';', '；']
+    parts = [prompt]
+    for sep in separators:
+        new_parts = []
+        for p in parts:
+            new_parts.extend(p.split(sep))
+        parts = new_parts
+    parts = [p.strip() for p in parts if p.strip()]
+    # 如果片段数量 >= 3 且平均长度 <= 6，认为是标签组合
+    if len(parts) >= 3:
+        total_len = sum(len(p) for p in parts)
+        avg_len = total_len / len(parts)
+        if avg_len <= 6:
+            # 标签组合直接返回去重后的列表
+            tags = []
+            seen = set()
+            for p in parts:
+                # 过滤过短或纯数字
+                if len(p) < 2 or p.isdigit() or p in seen:
+                    continue
+                # 去除停用词（可选，但标签组合通常保留所有词）
+                # 这里为了灵活性，我们不过滤停用词，但可自定义
+                seen.add(p)
+                tags.append(p)
+            # 限制数量
+            if len(tags) > effective_max:
+                tags = tags[:effective_max]
+            logger.info(f"标签组合直接提取: {tags}")
+            return tags
+
+    # ---------- 自然语言处理（原有逻辑） ----------
+    # 中文处理
     if has_chinese(prompt):
         try:
-            # 使用 jieba.posseg 分词并过滤词性
             words = pseg.cut(prompt)
             collected = []
             for word, flag in words:
                 word = word.strip()
-                if len(word) < 2:
+                if len(word) < 2 or word in STOPWORDS:
                     continue
-                if word in STOPWORDS:
-                    continue
-                # 只保留名词(n)、动词(v)、形容词(a)
                 if flag in ('n', 'v', 'a'):
-                    # 额外排除单字词
-                    if len(word) >= 2:
-                        collected.append(word)
+                    collected.append(word)
             if collected:
-                # 统计词频
                 counter = Counter(collected)
-                # 按频率降序，相同频率按长度降序（优先长词）
                 sorted_items = sorted(counter.items(), key=lambda x: (x[1], len(x[0])), reverse=True)
                 tags = [w for w, _ in sorted_items[:effective_max]]
                 logger.info(f"jieba.posseg 提取（名词/动词/形容词）: {tags}")
@@ -117,11 +142,10 @@ def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
         except Exception as e:
             logger.error(f"jieba.posseg 提取失败: {e}")
 
-    # ----- 英文处理 -----
+    # 英文处理（保持原有）
     try:
         results = yake_extractor.extract_keywords(prompt)
         candidate_words = [kw.strip() for kw, _ in results if kw.strip() not in STOPWORDS]
-        # 如果 nltk 可用，可进一步过滤词性，但此处不强制
         tags = [kw for kw in candidate_words if kw.lower() not in STOPWORDS and len(kw) > 2]
         if tags:
             logger.info(f"yake 提取（英文）: {tags[:effective_max]}")
@@ -129,7 +153,7 @@ def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
     except Exception as e:
         logger.error(f"英文提取失败: {e}")
 
-    # ----- 回退：中文词频统计（不限制词性，但仅当以上失败时） -----
+    # 回退词频统计
     try:
         words = jieba.lcut(prompt)
         counter = Counter(words)
