@@ -101,106 +101,6 @@ def get_card_detail(card_id: int):
         raise HTTPException(status_code=404, detail="卡片不存在")
     return card
 
-@app.post("/api/cards", dependencies=[Depends(get_current_user)])
-async def create_card_endpoint(
-    title: Optional[str] = Form(None),
-    positive_prompt: str = Form(...),
-    negative_prompt: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),
-    image: Optional[UploadFile] = File(None),
-    workflow: Optional[UploadFile] = File(None),
-):
-    if not positive_prompt:
-        raise HTTPException(status_code=400, detail="正向提示词不能为空")
-
-    image_path = None
-    workflow_path = None
-
-    if image and image.filename:
-        ext = os.path.splitext(image.filename)[1]
-        filename = f"img_{datetime.utcnow().timestamp()}{ext}"
-        save_path = os.path.join(Config.IMAGE_DIR, filename)
-        with open(save_path, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        image_path = f"/uploads/images/{filename}"
-
-    if workflow and workflow.filename:
-        ext = os.path.splitext(workflow.filename)[1]
-        filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
-        save_path = os.path.join(Config.WORKFLOW_DIR, filename)
-        with open(save_path, "wb") as f:
-            shutil.copyfileobj(workflow.file, f)
-        workflow_path = f"/uploads/workflows/{filename}"
-
-    card_id = create_card(
-        title=title,
-        positive_prompt=positive_prompt,
-        negative_prompt=negative_prompt,
-        tags=tags,
-        image_path=image_path,
-        workflow_path=workflow_path
-    )
-    logger.info(f"Created card {card_id}")
-    return {"id": card_id, "message": "创建成功"}
-
-@app.put("/api/cards/{card_id}", dependencies=[Depends(get_current_user)])
-async def update_card_endpoint(
-    card_id: int,
-    title: Optional[str] = Form(None),
-    positive_prompt: str = Form(...),
-    negative_prompt: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),
-    image: Optional[UploadFile] = File(None),
-    workflow: Optional[UploadFile] = File(None),
-):
-    existing = get_card(card_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="卡片不存在")
-
-    if not positive_prompt:
-        raise HTTPException(status_code=400, detail="正向提示词不能为空")
-
-    image_path = existing["image_path"]
-    workflow_path = existing["workflow_path"]
-
-    if image and image.filename:
-        if existing["image_path"]:
-            old_path = os.path.join(Config.UPLOAD_DIR, existing["image_path"].lstrip("/uploads"))
-            if os.path.exists(old_path):
-                os.remove(old_path)
-        ext = os.path.splitext(image.filename)[1]
-        filename = f"img_{datetime.utcnow().timestamp()}{ext}"
-        save_path = os.path.join(Config.IMAGE_DIR, filename)
-        with open(save_path, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        image_path = f"/uploads/images/{filename}"
-
-    if workflow and workflow.filename:
-        if existing["workflow_path"]:
-            old_path = os.path.join(Config.UPLOAD_DIR, existing["workflow_path"].lstrip("/uploads"))
-            if os.path.exists(old_path):
-                os.remove(old_path)
-        ext = os.path.splitext(workflow.filename)[1]
-        filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
-        save_path = os.path.join(Config.WORKFLOW_DIR, filename)
-        with open(save_path, "wb") as f:
-            shutil.copyfileobj(workflow.file, f)
-        workflow_path = f"/uploads/workflows/{filename}"
-
-    success = update_card(
-        card_id=card_id,
-        title=title,
-        positive_prompt=positive_prompt,
-        negative_prompt=negative_prompt,
-        tags=tags,
-        image_path=image_path,
-        workflow_path=workflow_path
-    )
-    if not success:
-        raise HTTPException(status_code=404, detail="更新失败")
-    logger.info(f"Updated card {card_id}")
-    return {"message": "更新成功"}
-
 @app.delete("/api/cards/{card_id}", dependencies=[Depends(get_current_user)])
 def delete_card_endpoint(card_id: int):
     existing = get_card(card_id)
@@ -250,7 +150,6 @@ def delete_tag_endpoint(tag_id: int):
         raise HTTPException(status_code=404, detail="标签不存在")
     return {"message": "删除成功"}
 
-
 @app.post("/api/extract-prompt-from-image")
 async def extract_prompt_from_image(file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith('image/'):
@@ -273,18 +172,34 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"工作流数据格式错误: {str(e)}")
 
+    # ---------- 定义模型文件后缀 ----------
+    MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx'}
+
+    # ---------- 辅助：判断是否为模型文件 ----------
+    def is_model_file(text: str) -> bool:
+        lower = text.lower().strip()
+        return any(lower.endswith(ext) for ext in MODEL_EXTENSIONS)
+
+    def is_guide_text(text: str) -> bool:
+        return text.strip().startswith('Guide:')
+
     # ---------- 提取候选提示词 ----------
     candidates = set()
+
     def collect_texts(obj):
         if isinstance(obj, dict):
             for key, value in obj.items():
                 if key in ('text', 'prompt', 'widgets_values'):
                     if isinstance(value, str) and len(value) > 10:
-                        candidates.add(value.strip())
+                        stripped = value.strip()
+                        if not is_guide_text(stripped) and not is_model_file(stripped):
+                            candidates.add(stripped)
                     elif isinstance(value, list):
                         for item in value:
                             if isinstance(item, str) and len(item) > 10:
-                                candidates.add(item.strip())
+                                stripped = item.strip()
+                                if not is_guide_text(stripped) and not is_model_file(stripped):
+                                    candidates.add(stripped)
                 elif key == 'nodes' and isinstance(value, list):
                     for node in value:
                         collect_texts(node)
@@ -296,29 +211,94 @@ async def extract_prompt_from_image(file: UploadFile = File(...)):
 
     collect_texts(data)
 
-    # 如果 candidates 为空，降级正则提取
     if not candidates:
         import re
         found = re.findall(r'"(.*?)"', workflow_data)
         for f in found:
             if len(f) > 20 and (re.search(r'[\u4e00-\u9fff]', f) or re.search(r'[a-zA-Z]{3,}', f)):
-                candidates.add(f)
+                stripped = f.strip()
+                if not is_guide_text(stripped) and not is_model_file(stripped):
+                    candidates.add(stripped)
 
     candidates_list = sorted(list(candidates), key=len, reverse=True)
 
     # ---------- 提取模型文件名 ----------
     model_names = set()
-    nodes = data.get('nodes', [])
-    for node in nodes:
-        node_type = node.get('type')
-        if node_type in ('UNETLoader', 'CLIPLoader', 'VAELoader', 'LoraLoaderModelOnly'):
-            widgets = node.get('widgets_values', [])
-            if widgets and isinstance(widgets, list) and len(widgets) > 0:
-                name = widgets[0]
-                if name and isinstance(name, str):
-                    # 取文件名（去掉路径）
-                    base = os.path.basename(name)
-                    model_names.add(base)
+
+    def extract_models(obj):
+        if isinstance(obj, dict):
+            for key in ['model_name', 'unet_name', 'clip_name', 'vae_name', 'model', 'name']:
+                if key in obj and isinstance(obj[key], str):
+                    val = obj[key].strip()
+                    if is_model_file(val):
+                        model_names.add(os.path.basename(val))
+            if 'widgets_values' in obj and isinstance(obj['widgets_values'], list):
+                for item in obj['widgets_values']:
+                    if isinstance(item, str) and is_model_file(item):
+                        model_names.add(os.path.basename(item))
+            for value in obj.values():
+                extract_models(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                extract_models(item)
+
+    extract_models(data)
+
+    if not model_names and 'nodes' in data:
+        for node in data['nodes']:
+            node_type = node.get('type', '')
+            if any(t in node_type for t in ['Loader', 'UNET', 'CLIP', 'VAE', 'Lora']):
+                if 'widgets_values' in node and isinstance(node['widgets_values'], list):
+                    for w in node['widgets_values']:
+                        if isinstance(w, str) and is_model_file(w):
+                            model_names.add(os.path.basename(w))
+
+    # ---------- 自动保存模型链接（从全局 workflow_data 提取） ----------
+    if model_names:
+        import re
+        # 匹配 Markdown 链接，文件名以模型后缀结尾
+        pattern = re.compile(r'\[([^\]]+\.(?:safetensors|pth|bin|ckpt|pt|onnx))\]\(([^)]+)\)', re.IGNORECASE)
+        matches = pattern.findall(workflow_data)
+        link_map = {}
+        for filename, url in matches:
+            link_map[filename] = url
+
+        # 如果未找到，再尝试从 nodes 中收集文本
+        if not link_map:
+            text_pool = []
+            def collect_text(obj):
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if key in ('text', 'widgets_values', 'title', 'content'):
+                            if isinstance(value, str):
+                                text_pool.append(value)
+                            elif isinstance(value, list):
+                                for item in value:
+                                    if isinstance(item, str):
+                                        text_pool.append(item)
+                        else:
+                            collect_text(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        collect_text(item)
+            collect_text(data)
+            full_text = ' '.join(text_pool)
+            matches = pattern.findall(full_text)
+            for filename, url in matches:
+                link_map[filename] = url
+
+        from backend.crud import get_model_link, save_model_link
+        saved_count = 0
+        for model_name in model_names:
+            if model_name in link_map:
+                url = link_map[model_name]
+                existing = get_model_link(model_name)
+                if existing != url:
+                    save_model_link(model_name, url)
+                    saved_count += 1
+                    logger.info(f"自动保存模型链接: {model_name} -> {url}")
+        if saved_count > 0:
+            logger.info(f"共自动保存 {saved_count} 个模型链接")
 
     return {"candidates": candidates_list, "models": list(model_names)}
 
@@ -335,3 +315,144 @@ def set_model_link(model_name: str = Form(...), link: str = Form(...)):
 def remove_model_link(model_name: str):
     delete_model_link(model_name)
     return {"message": "删除成功"}
+
+def extract_models_from_file_path(file_path: str) -> list:
+    """从图片文件提取模型名称列表"""
+    try:
+        from PIL import Image
+        image = Image.open(file_path)
+        workflow_data = image.info.get('workflow') or image.info.get('prompt')
+        if not workflow_data:
+            return []
+        data = json.loads(workflow_data)
+        MODEL_EXTENSIONS = {'.safetensors', '.pth', '.bin', '.ckpt', '.pt', '.onnx'}
+        model_names = set()
+        def extract_models(obj):
+            if isinstance(obj, dict):
+                for key in ['model_name', 'unet_name', 'clip_name', 'vae_name', 'model', 'name']:
+                    if key in obj and isinstance(obj[key], str):
+                        val = obj[key].strip()
+                        if any(val.endswith(ext) for ext in MODEL_EXTENSIONS):
+                            model_names.add(os.path.basename(val))
+                if 'widgets_values' in obj and isinstance(obj['widgets_values'], list):
+                    for item in obj['widgets_values']:
+                        if isinstance(item, str) and any(item.endswith(ext) for ext in MODEL_EXTENSIONS):
+                            model_names.add(os.path.basename(item))
+                for value in obj.values():
+                    extract_models(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    extract_models(item)
+        extract_models(data)
+        return list(model_names)
+    except Exception as e:
+        logger.warning(f"提取模型失败: {e}")
+        return []
+
+@app.post("/api/cards", dependencies=[Depends(get_current_user)])
+async def create_card_endpoint(
+    title: Optional[str] = Form(None),
+    positive_prompt: str = Form(...),
+    negative_prompt: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    workflow: Optional[UploadFile] = File(None),
+):
+    if not positive_prompt:
+        raise HTTPException(status_code=400, detail="正向提示词不能为空")
+
+    image_path = None
+    workflow_path = None
+    models = []
+
+    # 保存图片
+    if image and image.filename:
+        ext = os.path.splitext(image.filename)[1]
+        filename = f"img_{datetime.utcnow().timestamp()}{ext}"
+        save_path = os.path.join(Config.IMAGE_DIR, filename)
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(image.file, f)
+        image_path = f"/uploads/images/{filename}"
+        # 提取模型
+        models = extract_models_from_file_path(save_path)
+
+    if workflow and workflow.filename:
+        ext = os.path.splitext(workflow.filename)[1]
+        filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
+        save_path = os.path.join(Config.WORKFLOW_DIR, filename)
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(workflow.file, f)
+        workflow_path = f"/uploads/workflows/{filename}"
+
+    card_id = create_card(
+        title=title,
+        positive_prompt=positive_prompt,
+        negative_prompt=negative_prompt,
+        tags=tags,
+        image_path=image_path,
+        workflow_path=workflow_path,
+        models=models
+    )
+    logger.info(f"Created card {card_id}")
+    return {"id": card_id, "message": "创建成功"}
+
+@app.put("/api/cards/{card_id}", dependencies=[Depends(get_current_user)])
+async def update_card_endpoint(
+    card_id: int,
+    title: Optional[str] = Form(None),
+    positive_prompt: str = Form(...),
+    negative_prompt: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None),
+    workflow: Optional[UploadFile] = File(None),
+):
+    existing = get_card(card_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="卡片不存在")
+
+    if not positive_prompt:
+        raise HTTPException(status_code=400, detail="正向提示词不能为空")
+
+    image_path = existing["image_path"]
+    workflow_path = existing["workflow_path"]
+    models = None
+
+    if image and image.filename:
+        if existing["image_path"]:
+            old_path = os.path.join(Config.UPLOAD_DIR, existing["image_path"].lstrip("/uploads"))
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        ext = os.path.splitext(image.filename)[1]
+        filename = f"img_{datetime.utcnow().timestamp()}{ext}"
+        save_path = os.path.join(Config.IMAGE_DIR, filename)
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(image.file, f)
+        image_path = f"/uploads/images/{filename}"
+        models = extract_models_from_file_path(save_path)
+
+    if workflow and workflow.filename:
+        if existing["workflow_path"]:
+            old_path = os.path.join(Config.UPLOAD_DIR, existing["workflow_path"].lstrip("/uploads"))
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        ext = os.path.splitext(workflow.filename)[1]
+        filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
+        save_path = os.path.join(Config.WORKFLOW_DIR, filename)
+        with open(save_path, "wb") as f:
+            shutil.copyfileobj(workflow.file, f)
+        workflow_path = f"/uploads/workflows/{filename}"
+
+    success = update_card(
+        card_id=card_id,
+        title=title,
+        positive_prompt=positive_prompt,
+        negative_prompt=negative_prompt,
+        tags=tags,
+        image_path=image_path,
+        workflow_path=workflow_path,
+        models=models
+    )
+    if not success:
+        raise HTTPException(status_code=404, detail="更新失败")
+    logger.info(f"Updated card {card_id}")
+    return {"message": "更新成功"}

@@ -196,13 +196,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 showToast('该卡片暂无模型信息');
                 return;
             }
+
             // 获取模型链接
             const linkRes = await fetch('/api/model-links');
             const links = await linkRes.json();
             const linkMap = {};
             links.forEach(item => linkMap[item.model_name] = item.link);
 
-            // 弹窗展示模型列表
+            // 创建弹窗
             const modal = document.createElement('div');
             modal.className = 'modal-overlay';
             modal.style.display = 'flex';
@@ -210,13 +211,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="modal-box" style="max-width:600px;">
                     <h2 style="text-align:center;margin-bottom:16px;">🧠 大模型列表</h2>
                     <div id="modelList" style="max-height:400px;overflow-y:auto;">
-                        ${models.map(name => `
-                            <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f1f4f9;">
-                                <span style="flex:1;font-weight:500;">${name}</span>
-                                ${linkMap[name] ? `<a href="${linkMap[name]}" target="_blank" style="color:#6366f1;text-decoration:underline;">访问链接</a>` : `<input type="text" placeholder="输入链接" data-model="${name}" style="flex:1;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;">`}
-                                <button class="btn-save-link" data-model="${name}" style="background:#6366f1;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">保存</button>
-                            </div>
-                        `).join('')}
+                        ${models.map(name => {
+                            const hasLink = linkMap[name] && linkMap[name].trim() !== '';
+                            return `
+                                <div class="model-row" data-model="${name}" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f1f4f9;">
+                                    <span style="flex:1;font-weight:500;">${name}</span>
+                                    ${hasLink ? `
+                                        <a href="${linkMap[name]}" target="_blank" class="model-link" style="color:#6366f1;text-decoration:underline;font-size:0.9rem;">访问链接</a>
+                                        <button class="btn-edit-link" data-model="${name}" style="background:#e2e8f0;color:#1e293b;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">编辑</button>
+                                    ` : `
+                                        <input type="text" placeholder="输入链接" data-model="${name}" style="flex:1;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.9rem;">
+                                        <button class="btn-save-link" data-model="${name}" style="background:#6366f1;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">保存</button>
+                                    `}
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                     <div style="display:flex;justify-content:flex-end;margin-top:16px;">
                         <button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button>
@@ -225,7 +234,51 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             document.body.appendChild(modal);
 
-            // 绑定保存按钮
+            // 辅助函数：将一行切换为显示模式（链接+编辑）
+            function switchToDisplayMode(row, modelName, link) {
+                row.innerHTML = `
+                    <span style="flex:1;font-weight:500;">${modelName}</span>
+                    <a href="${link}" target="_blank" class="model-link" style="color:#6366f1;text-decoration:underline;font-size:0.9rem;">访问链接</a>
+                    <button class="btn-edit-link" data-model="${modelName}" style="background:#e2e8f0;color:#1e293b;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">编辑</button>
+                `;
+                // 重新绑定编辑事件
+                row.querySelector('.btn-edit-link').addEventListener('click', function() {
+                    const modelName = this.dataset.model;
+                    // 切换为编辑模式
+                    const currentLink = linkMap[modelName] || '';
+                    row.innerHTML = `
+                        <span style="flex:1;font-weight:500;">${modelName}</span>
+                        <input type="text" placeholder="输入链接" data-model="${modelName}" style="flex:1;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.9rem;" value="${currentLink}">
+                        <button class="btn-save-link" data-model="${modelName}" style="background:#6366f1;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">保存</button>
+                    `;
+                    // 重新绑定保存事件
+                    row.querySelector('.btn-save-link').addEventListener('click', async function() {
+                        const input = this.parentElement.querySelector('input[type="text"]');
+                        const link = input ? input.value.trim() : '';
+                        if (!link) {
+                            showToast('请输入链接');
+                            return;
+                        }
+                        const formData = new FormData();
+                        formData.append('model_name', modelName);
+                        formData.append('link', link);
+                        const res = await fetch('/api/model-links', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        if (res.ok) {
+                            showToast('保存成功');
+                            // 更新 linkMap 并切换回显示模式
+                            linkMap[modelName] = link;
+                            switchToDisplayMode(row, modelName, link);
+                        } else {
+                            showToast('保存失败');
+                        }
+                    });
+                });
+            }
+
+            // 绑定“保存”按钮（新增链接）
             modal.querySelectorAll('.btn-save-link').forEach(btn => {
                 btn.addEventListener('click', async function() {
                     const modelName = this.dataset.model;
@@ -244,18 +297,60 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                     if (res.ok) {
                         showToast('保存成功');
-                        // 刷新当前弹窗
-                        handleModels(cardId);
+                        // 更新 linkMap 并切换当前行为显示模式
+                        linkMap[modelName] = link;
+                        const row = this.closest('.model-row');
+                        switchToDisplayMode(row, modelName, link);
                     } else {
                         showToast('保存失败');
                     }
                 });
             });
+
+            // 绑定“编辑”按钮（已有链接时）
+            modal.querySelectorAll('.btn-edit-link').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const modelName = this.dataset.model;
+                    const row = this.closest('.model-row');
+                    const currentLink = linkMap[modelName] || '';
+                    // 切换为编辑模式
+                    row.innerHTML = `
+                        <span style="flex:1;font-weight:500;">${modelName}</span>
+                        <input type="text" placeholder="输入链接" data-model="${modelName}" style="flex:1;padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:0.9rem;" value="${currentLink}">
+                        <button class="btn-save-link" data-model="${modelName}" style="background:#6366f1;color:white;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">保存</button>
+                    `;
+                    // 重新绑定保存事件
+                    row.querySelector('.btn-save-link').addEventListener('click', async function() {
+                        const input = this.parentElement.querySelector('input[type="text"]');
+                        const link = input ? input.value.trim() : '';
+                        if (!link) {
+                            showToast('请输入链接');
+                            return;
+                        }
+                        const formData = new FormData();
+                        formData.append('model_name', modelName);
+                        formData.append('link', link);
+                        const res = await fetch('/api/model-links', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        if (res.ok) {
+                            showToast('保存成功');
+                            linkMap[modelName] = link;
+                            switchToDisplayMode(row, modelName, link);
+                        } else {
+                            showToast('保存失败');
+                        }
+                    });
+                });
+            });
+
         } catch (e) {
             showToast('获取模型信息失败');
             console.error(e);
         }
     }
+
 
     function renderCards(cards) {
         if (!cards || !cards.length) {

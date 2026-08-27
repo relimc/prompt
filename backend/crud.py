@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import datetime
 from backend.database import get_db_connection
 from backend.tag_extractor import extract_tags_from_prompt
@@ -48,119 +49,25 @@ def sync_card_tags(card_id: int, new_tags: list):
 
 # ---------- 卡片 CRUD ----------
 def get_all_cards():
+    """获取所有卡片，按创建时间降序"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM cards ORDER BY created_at DESC')
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-def get_card(card_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM cards WHERE id = ?', (card_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-# backend/crud.py
-
-def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
-    cursor.execute('''
-        INSERT INTO cards (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, now, now))
-    card_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-
-    # ---------- 处理标签 ----------
-    manual_tags = []
-    if tags:
-        manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
-
-    extracted = []
-    if positive_prompt:
-        extracted = extract_tags_from_prompt(positive_prompt)
-
-    # 合并去重
-    all_tags = list(set(manual_tags + extracted))
-
-    if all_tags:
-        sync_card_tags(card_id, all_tags)
-        # 更新 cards.tags 字段（逗号分隔）
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE cards SET tags = ? WHERE id = ?', (','.join(all_tags), card_id))
-        conn.commit()
+    try:
+        cursor.execute('SELECT * FROM cards ORDER BY created_at DESC')
+        rows = cursor.fetchall()
+        # 如果 rows 为空，返回空列表
+        result = [dict(row) for row in rows] if rows else []
         conn.close()
-
-    return card_id
-
-
-def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
-    cursor.execute('''
-        UPDATE cards
-        SET title = ?, positive_prompt = ?, negative_prompt = ?, tags = ?,
-            image_path = COALESCE(?, image_path),
-            workflow_path = COALESCE(?, workflow_path),
-            updated_at = ?
-        WHERE id = ?
-    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, now, card_id))
-    affected = cursor.rowcount
-    conn.commit()
-    conn.close()
-
-    if affected and positive_prompt:
-        # 处理手动标签
-        manual_tags = []
-        if tags:
-            manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
-
-        extracted = extract_tags_from_prompt(positive_prompt)
-        all_tags = list(set(manual_tags + extracted))
-
-        if all_tags:
-            sync_card_tags(card_id, all_tags)
-            # 更新 cards.tags 字段
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('UPDATE cards SET tags = ? WHERE id = ?', (','.join(all_tags), card_id))
-            conn.commit()
-            conn.close()
-        else:
-            # 如果没有标签，清空关联
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
-            cursor.execute('UPDATE cards SET tags = NULL WHERE id = ?', (card_id,))
-            conn.commit()
-            conn.close()
-
-    return affected > 0
-
-def delete_card(card_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT tag_id FROM card_tags WHERE card_id = ?', (card_id,))
-    tag_ids = [row['tag_id'] for row in cursor.fetchall()]
-    for tid in tag_ids:
-        cursor.execute('UPDATE tags SET usage_count = usage_count - 1 WHERE id = ?', (tid,))
-    cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
-    cursor.execute('DELETE FROM cards WHERE id = ?', (card_id,))
-    affected = cursor.rowcount
-    conn.commit()
-    conn.close()
-    return affected > 0
+        return result
+    except Exception as e:
+        conn.close()
+        # 记录错误并重新抛出，以便上层捕获
+        raise e
 
 def search_cards(keyword: str = "", tags: str = ""):
+    """
+    搜索卡片：支持关键词（标题、正反提示词、标签）和标签过滤（逗号分隔）
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     query = "SELECT * FROM cards WHERE 1=1"
@@ -178,10 +85,111 @@ def search_cards(keyword: str = "", tags: str = ""):
                 params.append(f"%{tag}%")
             query += " AND (" + " OR ".join(conditions) + ")"
     query += " ORDER BY created_at DESC"
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        result = [dict(row) for row in rows] if rows else []
+        conn.close()
+        return result
+    except Exception as e:
+        conn.close()
+        raise e
+
+def get_card(card_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM cards WHERE id = ?', (card_id,))
+    row = cursor.fetchone()
     conn.close()
-    return [dict(row) for row in rows]
+    return dict(row) if row else None
+
+
+# backend/crud.py
+def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None):
+    """创建卡片，保存 models 为 JSON 字符串"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    models_json = json.dumps(models) if models else None
+    cursor.execute('''
+        INSERT INTO cards (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, now, now))
+    card_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    # ---------- 标签处理 ----------
+    manual_tags = []
+    if tags:
+        manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
+    extracted = []
+    if positive_prompt:
+        extracted = extract_tags_from_prompt(positive_prompt)
+    all_tags = list(set(manual_tags + extracted))
+    if all_tags:
+        sync_card_tags(card_id, all_tags)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE cards SET tags = ? WHERE id = ?', (','.join(all_tags), card_id))
+        conn.commit()
+        conn.close()
+    return card_id
+
+def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None):
+    """更新卡片，同时更新 models"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    models_json = json.dumps(models) if models else None
+    cursor.execute('''
+        UPDATE cards
+        SET title = ?, positive_prompt = ?, negative_prompt = ?, tags = ?,
+            image_path = COALESCE(?, image_path),
+            workflow_path = COALESCE(?, workflow_path),
+            models = COALESCE(?, models),
+            updated_at = ?
+        WHERE id = ?
+    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, now, card_id))
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    if affected and positive_prompt:
+        manual_tags = []
+        if tags:
+            manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
+        extracted = extract_tags_from_prompt(positive_prompt)
+        all_tags = list(set(manual_tags + extracted))
+        if all_tags:
+            sync_card_tags(card_id, all_tags)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE cards SET tags = ? WHERE id = ?', (','.join(all_tags), card_id))
+            conn.commit()
+            conn.close()
+        else:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
+            cursor.execute('UPDATE cards SET tags = NULL WHERE id = ?', (card_id,))
+            conn.commit()
+            conn.close()
+    return affected > 0
+
+def delete_card(card_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT tag_id FROM card_tags WHERE card_id = ?', (card_id,))
+    tag_ids = [row['tag_id'] for row in cursor.fetchall()]
+    for tid in tag_ids:
+        cursor.execute('UPDATE tags SET usage_count = usage_count - 1 WHERE id = ?', (tid,))
+    cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
+    cursor.execute('DELETE FROM cards WHERE id = ?', (card_id,))
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
 
 # ---------- 标签云需要的函数 ----------
 def get_all_tags_with_stats():
@@ -273,6 +281,50 @@ def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
         del item['image_paths']
         result.append(item)
     return result, total
+
+def get_model_link(model_name: str):
+    """获取单个模型的链接，不存在则返回 None"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT link FROM model_links WHERE model_name = ?', (model_name,))
+    row = cursor.fetchone()
+    conn.close()
+    return row['link'] if row else None
+
+def extract_models_from_image_path(image_path):
+    """从图片文件路径中提取模型名称列表"""
+    # 将相对路径转为绝对路径
+    from backend.config import Config
+    import os, json
+    from PIL import Image
+
+    # 构造完整文件路径
+    # image_path 格式为 /uploads/images/xxx.png
+    full_path = os.path.join(Config.BASE_DIR, image_path.lstrip('/'))
+    if not os.path.exists(full_path):
+        return []
+
+    try:
+        img = Image.open(full_path)
+        workflow_data = img.info.get('workflow') or img.info.get('prompt')
+        if not workflow_data:
+            return []
+        data = json.loads(workflow_data)
+        model_names = set()
+        for node in data.get('nodes', []):
+            node_type = node.get('type')
+            if node_type in ('UNETLoader', 'CLIPLoader', 'VAELoader', 'LoraLoaderModelOnly'):
+                widgets = node.get('widgets_values', [])
+                if widgets and isinstance(widgets, list) and len(widgets) > 0:
+                    name = widgets[0]
+                    if name and isinstance(name, str):
+                        base = os.path.basename(name)
+                        model_names.add(base)
+        return list(model_names)
+    except Exception as e:
+        logger.error(f"提取模型失败: {e}")
+        return []
+
 
 def get_model_links():
     conn = get_db_connection()
