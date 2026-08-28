@@ -82,6 +82,11 @@ def init_db():
         )
     ''')
 
+    cursor.execute("PRAGMA table_info(cards)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'prompt_type' not in columns:
+        cursor.execute('ALTER TABLE cards ADD COLUMN prompt_type TEXT')
+
     conn.commit()
     conn.close()
 

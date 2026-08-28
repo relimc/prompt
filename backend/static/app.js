@@ -303,6 +303,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </select>
                     </div>
                     <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px;">
+                        <button class="btn-popup-delete" style="padding:6px 18px;border:none;border-radius:8px;background:#ef4444;color:white;cursor:pointer;font-weight:500;">删除</button>
                         <button class="btn-popup-cancel" style="padding:6px 18px;border:none;border-radius:8px;background:#e2e8f0;color:#1e293b;cursor:pointer;font-weight:500;">取消</button>
                         <button class="btn-popup-save" style="padding:6px 18px;border:none;border-radius:8px;background:#6366f1;color:white;cursor:pointer;font-weight:500;">确定</button>
                     </div>
@@ -326,6 +327,44 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // 取消
                 popup.querySelector('.btn-popup-cancel').addEventListener('click', () => overlay.remove());
+
+                // 删除
+                popup.querySelector('.btn-popup-delete').addEventListener('click', async function() {
+                    if (!confirm(`确定要删除模型“${modelName}”吗？此操作不可撤销。`)) return;
+                    if (!token) {
+                        showToast('请先登录');
+                        return;
+                    }
+                    const formData = new FormData();
+                    formData.append('model_name', modelName);
+                    try {
+                        const res = await fetch(`/api/cards/${cardId}/models`, {
+                            method: 'DELETE',
+                            headers: { 'Authorization': `Bearer ${token}` },
+                            body: formData
+                        });
+                        if (res.ok) {
+                            showToast('删除成功');
+                            overlay.remove();
+                            // 从主列表中移除该行
+                            const row = modal.querySelector(`.model-row[data-model="${modelName}"]`);
+                            if (row) {
+                                row.remove();
+                                delete linkMap[modelName];
+                                delete typeMap[modelName];
+                                const remaining = modal.querySelectorAll('.model-row');
+                                if (remaining.length === 0) {
+                                    modal.querySelector('#modelList').innerHTML = '<div style="text-align:center;padding:20px;color:#94a3b8;">暂无模型</div>';
+                                }
+                            }
+                        } else {
+                            const err = await res.json();
+                            showToast('删除失败: ' + (err.detail || ''));
+                        }
+                    } catch (e) {
+                        showToast('网络错误');
+                    }
+                });
 
                 // 确定
                 popup.querySelector('.btn-popup-save').addEventListener('click', async function() {
@@ -1252,64 +1291,10 @@ document.addEventListener('DOMContentLoaded', function() {
         selectedNegative = null;
         const modal = document.getElementById('candidateModal');
         const list = document.getElementById('candidateList');
-        const actions = document.getElementById('candidateActions');
-        if (!modal || !list || !actions) {
-            console.error('候选模态框元素未找到');
-            return;
-        }
+        if (!modal || !list) return;
         list.innerHTML = '';
-        actions.innerHTML = '';
 
-        // ---------- 创建 tooltip 元素 ----------
-        const tooltip = document.createElement('div');
-        tooltip.id = 'candidate-tooltip';
-        tooltip.style.cssText = `
-            position: absolute;
-            background: #1e293b;
-            color: #f1f5f9;
-            padding: 8px 14px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            max-width: 500px;
-            word-wrap: break-word;
-            white-space: pre-wrap;
-            z-index: 10000;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-            display: none;
-            pointer-events: none;
-            line-height: 1.5;
-            border: 1px solid #334155;
-        `;
-        document.body.appendChild(tooltip);
-
-        // 辅助函数：显示 tooltip
-        function showTooltip(targetEl, text) {
-            const rect = targetEl.getBoundingClientRect();
-            const scrollY = window.scrollY;
-            const scrollX = window.scrollX;
-            // 定位在目标元素下方，并水平居中
-            let top = rect.bottom + 8 + scrollY;
-            let left = rect.left + rect.width / 2 - tooltip.offsetWidth / 2 + scrollX;
-            // 防止溢出右边界
-            if (left + tooltip.offsetWidth > window.innerWidth - 20) {
-                left = window.innerWidth - tooltip.offsetWidth - 20;
-            }
-            if (left < 20) left = 20;
-            // 如果下方空间不足，显示在上方
-            if (top + tooltip.offsetHeight > window.innerHeight + scrollY - 20) {
-                top = rect.top - tooltip.offsetHeight - 8 + scrollY;
-            }
-            tooltip.textContent = text;
-            tooltip.style.display = 'block';
-            tooltip.style.top = top + 'px';
-            tooltip.style.left = left + 'px';
-        }
-
-        function hideTooltip() {
-            tooltip.style.display = 'none';
-        }
-
-        // ---------- 遍历候选 ----------
+        // ---------- 构建候选列表 ----------
         candidates.forEach((text) => {
             const item = document.createElement('div');
             item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #f1f4f9;';
@@ -1317,18 +1302,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const textSpan = document.createElement('span');
             const displayText = text.length > 100 ? text.slice(0, 100) + '...' : text;
             textSpan.textContent = displayText;
-            textSpan.title = text; // 保留 title 作为备选
+            textSpan.title = text;
             textSpan.style.cssText = 'flex:1;margin-right:12px;word-break:break-all;font-size:0.9rem;cursor:help;';
-
-            // 鼠标悬停显示完整文本
-            textSpan.addEventListener('mouseenter', function(e) {
-                showTooltip(this, this.title);
-            });
-            textSpan.addEventListener('mouseleave', function(e) {
-                hideTooltip();
+            textSpan.addEventListener('mouseenter', function() {
+                showToast(this.title);
             });
 
-            // ... 创建按钮等后续代码不变 ...
             const btnGroup = document.createElement('div');
             btnGroup.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
 
@@ -1375,37 +1354,50 @@ document.addEventListener('DOMContentLoaded', function() {
             list.appendChild(item);
         });
 
-        // ---------- 确定/取消按钮 ----------
+        // ---------- 底部操作栏（在列表外部） ----------
+        // 检查是否已存在操作栏，若存在则移除
+        const existingAction = document.getElementById('candidateActions');
+        if (existingAction) existingAction.remove();
+
+        const actionDiv = document.createElement('div');
+        actionDiv.id = 'candidateActions';
+        actionDiv.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;';
+
+        // 下拉框（左侧）
+        const typeSelect = document.createElement('select');
+        typeSelect.id = 'candidateTypeSelect';
+        typeSelect.style.cssText = 'padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.9rem;';
+        const options = [
+            { value: 'auto', label: '默认（自动判断）' },
+            { value: 'tags', label: '标签组合' },
+            { value: 'nl', label: '自然语言' },
+            { value: 'json', label: 'JSON格式' }
+        ];
+        options.forEach(opt => {
+            const option = document.createElement('option');
+            option.value = opt.value;
+            option.textContent = opt.label;
+            typeSelect.appendChild(option);
+        });
+        actionDiv.appendChild(typeSelect);
+
+        // 按钮组（右侧）
+        const btnDiv = document.createElement('div');
+        btnDiv.style.cssText = 'display:flex;gap:12px;';
         const confirmBtn = document.createElement('button');
         confirmBtn.textContent = '确定';
         confirmBtn.className = 'btn-primary';
         confirmBtn.style.cssText = 'padding:8px 24px;';
-        confirmBtn.addEventListener('click', () => {
-            const positiveInput = document.getElementById('editPositive');
-            const negativeInput = document.getElementById('editNegative');
-            if (selectedPositive) {
-                positiveInput.value = selectedPositive;
-                showToast('✅ 已设置正向提示词');
-            }
-            if (selectedNegative) {
-                negativeInput.value = selectedNegative;
-                showToast('✅ 已设置反向提示词');
-            }
-            if (!selectedPositive && !selectedNegative) {
-                showToast('未选择任何提示词');
-                return;
-            }
-            closeCandidateModal();
-        });
-
         const cancelBtn = document.createElement('button');
         cancelBtn.textContent = '取消';
         cancelBtn.className = 'btn-secondary';
         cancelBtn.style.cssText = 'padding:8px 24px;';
-        cancelBtn.addEventListener('click', closeCandidateModal);
+        btnDiv.appendChild(confirmBtn);
+        btnDiv.appendChild(cancelBtn);
+        actionDiv.appendChild(btnDiv);
 
-        actions.appendChild(confirmBtn);
-        actions.appendChild(cancelBtn);
+        // 将操作栏插入到列表之后（作为同级）
+        list.parentNode.insertBefore(actionDiv, list.nextSibling);
 
         // ---------- 更新按钮状态 ----------
         function updateCandidateButtons() {
@@ -1437,20 +1429,28 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
+        // ---------- 确定按钮事件 ----------
+        confirmBtn.addEventListener('click', function() {
+            if (!selectedPositive && !selectedNegative) {
+                showToast('请至少选择一个提示词');
+                return;
+            }
+            const selectedType = document.getElementById('candidateTypeSelect').value;
+            const positiveInput = document.getElementById('editPositive');
+            const negativeInput = document.getElementById('editNegative');
+            if (selectedPositive) positiveInput.value = selectedPositive;
+            if (selectedNegative) negativeInput.value = selectedNegative;
+            document.getElementById('editPromptType').value = selectedType;
+            closeCandidateModal();
+            showToast('已应用提示词');
+        });
+
+        // ---------- 取消按钮事件 ----------
+        cancelBtn.addEventListener('click', closeCandidateModal);
+
+        // 初始化按钮状态
         updateCandidateButtons();
         modal.style.display = 'flex';
-
-        // 模态框关闭时清理 tooltip
-        const closeHandler = function() {
-            hideTooltip();
-            // 移除事件监听，防止内存泄漏（可选）
-            modal.removeEventListener('click', closeHandler);
-        };
-        modal.addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeHandler();
-            }
-        });
     }
 
     function closeCandidateModal() {

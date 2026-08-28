@@ -12,7 +12,7 @@ from fastapi import Body
 from pydantic import BaseModel
 
 from backend.config import Config
-from backend.database import init_db
+from backend.database import init_db, get_db_connection
 from backend.crud import (
     create_card,
     get_all_cards,
@@ -22,13 +22,14 @@ from backend.crud import (
     search_cards,
     get_all_tags_with_stats,
     delete_tag,
-    get_tags_paginated  # 添加这一行
+    get_tags_paginated, get_model_link  # 添加这一行
 )
 from backend.auth import create_access_token, verify_token
 from backend.logging_config import logger
 from backend.crud import get_model_links, save_model_link, delete_model_link
 from backend.crud import update_model_type
 from backend.crud import get_whitelist, get_blacklist, add_whitelist, add_blacklist, remove_whitelist, remove_blacklist
+from backend.crud import update_card_models, delete_model_link
 
 # ---------- 确保上传目录存在 ----------
 os.makedirs(Config.IMAGE_DIR, exist_ok=True)
@@ -584,6 +585,7 @@ async def create_card_endpoint(
     tags: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     workflow: Optional[UploadFile] = File(None),
+    prompt_type: str = Form('auto'),
 ):
     if not positive_prompt:
         raise HTTPException(status_code=400, detail="正向提示词不能为空")
@@ -592,7 +594,6 @@ async def create_card_endpoint(
     workflow_path = None
     models = []
 
-    # 保存图片
     if image and image.filename:
         ext = os.path.splitext(image.filename)[1]
         filename = f"img_{datetime.utcnow().timestamp()}{ext}"
@@ -600,7 +601,6 @@ async def create_card_endpoint(
         with open(save_path, "wb") as f:
             shutil.copyfileobj(image.file, f)
         image_path = f"/uploads/images/{filename}"
-        # 提取模型
         models = extract_models_from_file_path(save_path)
 
     if workflow and workflow.filename:
@@ -618,28 +618,11 @@ async def create_card_endpoint(
         tags=tags,
         image_path=image_path,
         workflow_path=workflow_path,
-        models=models
+        models=models,
+        prompt_type=prompt_type
     )
     logger.info(f"Created card {card_id}")
     return {"id": card_id, "message": "创建成功"}
-
-@app.post("/api/model-links")
-async def set_model_link(
-    model_name: str = Form(...),
-    link: str = Form(...),
-    model_type: Optional[str] = Form(None)
-):
-    save_model_link(model_name, link, model_type)
-    return {"message": "保存成功"}
-
-@app.put("/api/model-links/{model_name}/type")
-async def update_model_type_endpoint(model_name: str, model_type: str = Form(...)):
-    try:
-        update_model_type(model_name, model_type)
-        return {"message": "类型更新成功"}
-    except Exception as e:
-        logger.error(f"更新模型类型失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/cards/{card_id}", dependencies=[Depends(get_current_user)])
 async def update_card_endpoint(
@@ -650,20 +633,20 @@ async def update_card_endpoint(
     tags: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     workflow: Optional[UploadFile] = File(None),
+    prompt_type: str = Form('auto'),
 ):
     existing = get_card(card_id)
     if not existing:
         raise HTTPException(status_code=404, detail="卡片不存在")
-
     if not positive_prompt:
         raise HTTPException(status_code=400, detail="正向提示词不能为空")
 
-    image_path = existing["image_path"]
-    workflow_path = existing["workflow_path"]
+    image_path = existing.get("image_path")
+    workflow_path = existing.get("workflow_path")
     models = None
 
     if image and image.filename:
-        if existing["image_path"]:
+        if existing.get("image_path"):
             old_path = os.path.join(Config.UPLOAD_DIR, existing["image_path"].lstrip("/uploads"))
             if os.path.exists(old_path):
                 os.remove(old_path)
@@ -676,7 +659,7 @@ async def update_card_endpoint(
         models = extract_models_from_file_path(save_path)
 
     if workflow and workflow.filename:
-        if existing["workflow_path"]:
+        if existing.get("workflow_path"):
             old_path = os.path.join(Config.UPLOAD_DIR, existing["workflow_path"].lstrip("/uploads"))
             if os.path.exists(old_path):
                 os.remove(old_path)
@@ -695,12 +678,31 @@ async def update_card_endpoint(
         tags=tags,
         image_path=image_path,
         workflow_path=workflow_path,
-        models=models
+        models=models,
+        prompt_type=prompt_type
     )
     if not success:
         raise HTTPException(status_code=404, detail="更新失败")
     logger.info(f"Updated card {card_id}")
     return {"message": "更新成功"}
+
+@app.post("/api/model-links")
+async def set_model_link(
+    model_name: str = Form(...),
+    link: str = Form(...),
+    model_type: Optional[str] = Form(None)
+):
+    save_model_link(model_name, link, model_type)
+    return {"message": "保存成功"}
+
+@app.put("/api/model-links/{model_name}/type")
+async def update_model_type_endpoint(model_name: str, model_type: str = Form(...)):
+    try:
+        update_model_type(model_name, model_type)
+        return {"message": "类型更新成功"}
+    except Exception as e:
+        logger.error(f"更新模型类型失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/tag-lists/whitelist")
 def get_whitelist_endpoint():
@@ -729,3 +731,46 @@ def add_whitelist_endpoint(keyword: str = Form(...)):
 def add_blacklist_endpoint(keyword: str = Form(...)):
     add_blacklist(keyword.strip())
     return {"message": "添加成功"}
+
+
+from backend.crud import update_card_models, delete_model_link, get_card
+import json
+
+
+@app.delete("/api/cards/{card_id}/models")
+async def delete_card_model(
+        card_id: int,
+        model_name: str = Form(...),
+        current_user: dict = Depends(get_current_user)
+):
+    # 获取卡片信息
+    card = get_card(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="卡片不存在")
+
+    # 解析 models 字段（JSON 数组）
+    models = card.get('models')
+    if models:
+        # 如果 models 是字符串，解析为列表
+        if isinstance(models, str):
+            try:
+                models = json.loads(models)
+            except json.JSONDecodeError:
+                models = []
+    else:
+        models = []
+
+    # 检查模型是否存在
+    if model_name not in models:
+        raise HTTPException(status_code=404, detail="模型不在卡片中")
+
+    # 移除模型
+    new_models = [m for m in models if m != model_name]
+
+    # 更新卡片 models 字段
+    update_card_models(card_id, new_models)  # 同步调用，不加 await
+
+    # 删除 model_links 中的记录
+    delete_model_link(model_name)  # 同步调用，不加 await
+
+    return {"message": "删除成功"}

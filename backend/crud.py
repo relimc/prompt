@@ -94,16 +94,17 @@ def get_all_cards():
 
 def search_cards(keyword: str = "", tags: str = ""):
     """
-    搜索卡片：支持关键词（标题、正反提示词、标签）和标签过滤（逗号分隔）
+    搜索卡片：支持关键词（标题、正反提示词、标签、大模型文件名）和标签过滤（逗号分隔）
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     query = "SELECT * FROM cards WHERE 1=1"
     params = []
     if keyword:
-        query += " AND (title LIKE ? OR positive_prompt LIKE ? OR negative_prompt LIKE ? OR tags LIKE ?)"
+        # 增加 models 字段的模糊搜索
+        query += " AND (title LIKE ? OR positive_prompt LIKE ? OR negative_prompt LIKE ? OR tags LIKE ? OR models LIKE ?)"
         like = f"%{keyword}%"
-        params.extend([like, like, like, like])
+        params.extend([like, like, like, like, like])
     if tags:
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         if tag_list:
@@ -113,15 +114,10 @@ def search_cards(keyword: str = "", tags: str = ""):
                 params.append(f"%{tag}%")
             query += " AND (" + " OR ".join(conditions) + ")"
     query += " ORDER BY created_at DESC"
-    try:
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        result = [dict(row) for row in rows] if rows else []
-        conn.close()
-        return result
-    except Exception as e:
-        conn.close()
-        raise e
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 def get_card(card_id: int):
     conn = get_db_connection()
@@ -132,40 +128,35 @@ def get_card(card_id: int):
     return dict(row) if row else None
 
 
-# backend/crud.py
 import json
 from datetime import datetime
 from backend.database import get_db_connection
 from backend.tag_extractor import extract_tags_from_prompt
 
-def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None):
-    """创建卡片，保存 models 为 JSON 字符串，并处理标签"""
+def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None, prompt_type='auto'):
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
     models_json = json.dumps(models) if models else None
     cursor.execute('''
-        INSERT INTO cards (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, now, now))
+        INSERT INTO cards (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models, prompt_type, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, prompt_type, now, now))
     card_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
-    # ---------- 处理标签 ----------
+    # 处理标签
     manual_tags = []
     if tags:
         manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
     extracted = []
     if positive_prompt:
-        extracted = extract_tags_from_prompt(positive_prompt)
-    # 调用 sync_card_tags，传入 positive_prompt 用于白名单强制添加
+        extracted = extract_tags_from_prompt(positive_prompt, prompt_type)
     sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
-
     return card_id
 
-def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None):
-    """更新卡片，同时更新 models 和标签"""
+def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None, prompt_type='auto'):
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -176,9 +167,10 @@ def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_pa
             image_path = COALESCE(?, image_path),
             workflow_path = COALESCE(?, workflow_path),
             models = COALESCE(?, models),
+            prompt_type = COALESCE(?, prompt_type),
             updated_at = ?
         WHERE id = ?
-    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, now, card_id))
+    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, prompt_type, now, card_id))
     affected = cursor.rowcount
     conn.commit()
     conn.close()
@@ -187,15 +179,8 @@ def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_pa
         manual_tags = []
         if tags:
             manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
-        extracted = extract_tags_from_prompt(positive_prompt)
-        # 同样传入 positive_prompt
+        extracted = extract_tags_from_prompt(positive_prompt, prompt_type)
         sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
-    else:
-        # 如果 positive_prompt 为空，仍需同步手动标签（但通常不会）
-        if tags:
-            manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
-            sync_card_tags(card_id, manual_tags, [], None)
-
     return affected > 0
 
 def delete_card(card_id: int):

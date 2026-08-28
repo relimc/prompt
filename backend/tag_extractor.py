@@ -1,9 +1,8 @@
 """
 标签提取模块（增强版）
-- 中文：使用 jieba.posseg 过滤词性，只保留名词、动词、形容词
-- 增加停用词和虚词过滤
-- 英文：整体保留短标签（无分隔符且词数≤4），否则使用 yake（top=500）+ 单词拆分，提取所有可能的实词和短语
-- 支持从 JSON 工作流中提取文本
+- 支持指定提示词类型：'auto', 'tags', 'nl', 'json'
+- 中文：合并"形容词+的+名词"模式，保留名词/动词/形容词
+- 英文：仅使用 yake 提取短语（不拆分单词）
 - 禁止提取负面词、马赛克等无关词汇
 - 标签组合（逗号/分号分隔）直接拆分所有标签，不限制数量
 - 自然语言提取所有名词/动词/形容词，不限制数量（返回全部，去重）
@@ -19,7 +18,7 @@ from collections import Counter
 
 logger = logging.getLogger(__name__)
 
-# ---------- 停用词（扩充） ----------
+# ---------- 停用词（完整） ----------
 STOPWORDS = {
     # 中文虚词、助词、语气词
     '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都',
@@ -42,11 +41,9 @@ STOPWORDS = {
     '绝对', '肯定', '必然', '也许', '或许', '大约',
 
     # ---------- 新增负面词 ----------
-    # 用户提供的负面词
     '马赛克', '模糊', '低分辨率', '低质量', '扭曲', '肢体', '诡异', '外观',
     '丑陋', '噪点', '网格感', 'JPEG压缩', '条纹', '异常', '水印', '乱码',
     '意义不明', '字符',
-    # 原有英文负面词
     'censor', 'censored', 'mosaic',
     'lowres', 'error', 'cropped', 'worst', 'low', 'jpeg',
     'artifacts', 'heterochromia', 'out', 'frame', 'blurry', 'fat', 'ugly', 'anatomy',
@@ -54,7 +51,7 @@ STOPWORDS = {
     'facial', 'details', 'unclear', 'cross', 'interlocked', 'fewer', 'different',
     'thickness', 'pointed', 'thick', 'long', 'thumbs', 'sharp', 'fingernails',
     'greyscale', 'grain', 'monochrome',
-    # 其他英文停用词
+    # 英文停用词
     'the', 'a', 'an', 'of', 'for', 'on', 'at', 'to', 'with', 'without', 'by',
     'and', 'or', 'but', 'so', 'as', 'than', 'that', 'this', 'these', 'those',
     'is', 'am', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has',
@@ -63,7 +60,7 @@ STOPWORDS = {
     '拒绝', '限制', '不应答',
 }
 
-# ---------- 初始化 yake（top 调至 500，获取更多候选） ----------
+# ---------- 初始化 yake ----------
 yake_extractor = yake.KeywordExtractor(lan="en", n=2, top=500)
 
 # ---------- 辅助函数 ----------
@@ -71,7 +68,7 @@ def has_chinese(text):
     return bool(re.search(r'[\u4e00-\u9fff]', text))
 
 def _calc_max_tags(text_len: int) -> int:
-    # 此函数仅用于回退方案，主逻辑不再使用
+    # 仅用于回退方案
     min_tags = 5
     max_tags = 80
     step_chars = 40
@@ -79,139 +76,86 @@ def _calc_max_tags(text_len: int) -> int:
     tags = min_tags + (text_len // step_chars) * step_count
     return max(min_tags, min(tags, max_tags))
 
-# ---------- 核心提取（纯文本） ----------
-def extract_tags_from_prompt(prompt: str, max_tags: int = None) -> list:
-    if not prompt or not isinstance(prompt, str):
-        return []
-    prompt = prompt.strip()
-    if len(prompt) < 3:
-        return []
-
-    # ---------- 定义分隔符 ----------
-    separators = [',', '，', ';', '；']
-
-    # ---------- 检测是否为标签组合 ----------
-    # 按逗号或分号拆分
-    parts = [prompt]
-    for sep in separators:
-        new_parts = []
-        for p in parts:
-            new_parts.extend(p.split(sep))
-        parts = new_parts
-    parts = [p.strip() for p in parts if p.strip()]
-    # 如果片段数量 >= 3 且平均长度 <= 6，认为是标签组合
-    if len(parts) >= 3:
-        total_len = sum(len(p) for p in parts)
-        avg_len = total_len / len(parts)
-        if avg_len <= 6:
-            # 标签组合直接返回所有标签（不限制数量）
-            tags = []
-            seen = set()
-            for p in parts:
-                if len(p) < 2 or p.isdigit() or p in seen:
-                    continue
-                seen.add(p)
-                tags.append(p)
-            logger.info(f"标签组合提取（全部）: {tags}")
-            return tags
-
-    # ---------- 自然语言处理 ----------
-    # 中文处理
-    if has_chinese(prompt):
-        try:
-            words = pseg.cut(prompt)
-            collected = []
-            for word, flag in words:
-                word = word.strip()
-                if len(word) < 2 or word in STOPWORDS:
-                    continue
-                if flag in ('n', 'v', 'a'):
-                    collected.append(word)
-            if collected:
-                # 去重（保持顺序）
-                seen = set()
-                unique = []
-                for w in collected:
-                    if w not in seen:
-                        seen.add(w)
-                        unique.append(w)
-                logger.info(f"jieba.posseg 提取（名词/动词/形容词，全部）: {unique}")
-                return unique
-        except Exception as e:
-            logger.error(f"jieba.posseg 提取失败: {e}")
-
-    # 英文处理
-    else:
-        # 检查是否为短标签：无分隔符，词数 <= 4
-        if not any(sep in prompt for sep in separators):
-            words = prompt.split()
-            if len(words) <= 4:
-                logger.info(f"英文短标签整体保留: [{prompt}]")
-                return [prompt.strip()]
-
-        # 提取所有关键词（短语和单词）
-        all_tags = set()
-
-        # 1. yake 提取短语（top 已设为 500）
-        try:
-            results = yake_extractor.extract_keywords(prompt)
-            for kw, score in results:
-                kw = kw.strip()
-                if len(kw) > 2 and kw not in STOPWORDS:
-                    all_tags.add(kw)
-        except Exception as e:
-            logger.error(f"yake 提取失败: {e}")
-
-        # 2. 拆分所有单词，过滤停用词和短词
-        try:
-            words = re.findall(r'\b[a-zA-Z]+\b', prompt)
-            for w in words:
-                w_lower = w.lower()
-                if len(w) >= 2 and w_lower not in STOPWORDS:
-                    all_tags.add(w)
-        except Exception as e:
-            logger.error(f"单词拆分提取失败: {e}")
-
-        if all_tags:
-            unique_tags = list(all_tags)
-            # 按长度和字母顺序排序（可选，但可保持一定顺序）
-            unique_tags.sort(key=lambda x: (len(x), x.lower()))
-            logger.info(f"英文提取（全部，共 {len(unique_tags)} 个）: {unique_tags}")
-            return unique_tags
-
-    # 回退词频统计（可限制数量，防止过度回退时产生过多噪音）
+# ---------- 中文自然语言提取 ----------
+def extract_nl_chinese(prompt: str) -> list:
+    """中文自然语言提取：合并"形容词+的+名词"，保留名词/动词/形容词"""
     try:
-        words = jieba.lcut(prompt)
-        counter = Counter(words)
-        filtered = [(w, c) for w, c in counter.items() if len(w) >= 2 and w not in STOPWORDS]
-        filtered.sort(key=lambda x: x[1], reverse=True)
-        effective_max = _calc_max_tags(len(prompt))
-        tags = [w for w, _ in filtered[:effective_max]]
-        if tags:
-            logger.info(f"词频回退提取（限制 {effective_max} 个）: {tags}")
-            return tags
+        words = pseg.cut(prompt)
+        tokens = list(words)
+        collected = []
+        i = 0
+        while i < len(tokens):
+            word, flag = tokens[i]
+            word = word.strip()
+            if not word or len(word) < 2:
+                i += 1
+                continue
+            # 检测"形容词+的+名词"模式
+            if flag == 'a' and i + 2 < len(tokens):
+                next_word, next_flag = tokens[i + 1]
+                next2_word, next2_flag = tokens[i + 2]
+                if next_word == '的' and next2_flag in ('n', 'nr', 'ns', 'nt', 'nz'):
+                    combined = word + next_word + next2_word
+                    if combined not in STOPWORDS:
+                        collected.append(combined)
+                    i += 3
+                    continue
+            # 否则，如果是名词、动词、形容词，单独添加
+            if flag in ('n', 'v', 'a') and word not in STOPWORDS:
+                collected.append(word)
+            i += 1
+        # 去重
+        seen = set()
+        unique = []
+        for w in collected:
+            if w not in seen:
+                seen.add(w)
+                unique.append(w)
+        logger.info(f"中文自然语言提取: {unique}")
+        return unique
     except Exception as e:
-        logger.error(f"回退失败: {e}")
+        logger.error(f"中文自然语言提取失败: {e}")
+        return []
 
-    return []
+# ---------- 英文自然语言提取 ----------
+def extract_nl_english(prompt: str) -> list:
+    """英文自然语言提取：仅使用 yake 短语，不拆分单词"""
+    separators = [',', '，', ';', '；']
+    # 短标签整体保留（无分隔符，词数 <= 4）
+    if not any(sep in prompt for sep in separators):
+        words = prompt.split()
+        if len(words) <= 4:
+            return [prompt.strip()]
+    try:
+        results = yake_extractor.extract_keywords(prompt)
+        tags = []
+        seen = set()
+        for kw, score in results:
+            kw = kw.strip()
+            if len(kw) < 2:
+                continue
+            if kw not in seen:
+                seen.add(kw)
+                tags.append(kw)
+        logger.info(f"英文自然语言提取: {tags}")
+        return tags
+    except Exception as e:
+        logger.error(f"英文自然语言提取失败: {e}")
+        return []
 
-# ---------- JSON 提取（增强） ----------
-def extract_from_json(json_str: str, topK: int = None, include_negative: bool = False) -> list:
+# ---------- JSON 提取 ----------
+def extract_from_json(json_str: str) -> list:
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError:
-        logger.warning("JSON 解析失败，降级为纯文本")
-        return extract_tags_from_prompt(json_str)
-
+        return extract_tags_from_prompt(json_str, 'auto')
     text_pool = []
-
     def collect_texts(obj):
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if key in ['text', 'prompt', 'widgets_values', 'title']:
-                    if isinstance(value, str):
-                        if len(value) > 10:
-                            text_pool.append(value)
+                if key in ('text', 'prompt', 'widgets_values', 'title'):
+                    if isinstance(value, str) and len(value) > 10:
+                        text_pool.append(value)
                     elif isinstance(value, list):
                         for item in value:
                             if isinstance(item, str) and len(item) > 10:
@@ -224,24 +168,88 @@ def extract_from_json(json_str: str, topK: int = None, include_negative: bool = 
         elif isinstance(obj, list):
             for item in obj:
                 collect_texts(item)
-
     collect_texts(data)
-
-    if include_negative:
-        # 可额外提取负面字段，但会增加噪声，默认关闭
-        pass
-
-    # 去重
     unique_texts = list(set(text_pool))
-    # 按长度从长到短排序
     unique_texts.sort(key=len, reverse=True)
-
     if not unique_texts:
         return []
-
-    # 合并
     full_text = " ".join(unique_texts)
     if len(full_text) > 2000:
         full_text = full_text[:2000]
+    return extract_tags_from_prompt(full_text, 'auto')
 
-    return extract_tags_from_prompt(full_text)
+# ---------- 核心函数 ----------
+def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
+    """
+    根据指定的提示词类型提取标签
+    prompt_type: 'auto', 'tags', 'nl', 'json'
+    """
+    if not prompt or not isinstance(prompt, str):
+        return []
+    prompt = prompt.strip()
+    if len(prompt) < 3:
+        return []
+
+    # 1. JSON 类型
+    if prompt_type == 'json':
+        return extract_from_json(prompt)
+
+    # 2. 标签组合类型
+    if prompt_type == 'tags':
+        separators = [',', '，', ';', '；']
+        parts = [prompt]
+        for sep in separators:
+            new_parts = []
+            for p in parts:
+                new_parts.extend(p.split(sep))
+            parts = new_parts
+        parts = [p.strip() for p in parts if p.strip()]
+        tags = []
+        seen = set()
+        for p in parts:
+            if len(p) >= 2 and not p.isdigit() and p not in seen:
+                seen.add(p)
+                tags.append(p)
+        return tags
+
+    # 3. 自然语言类型
+    if prompt_type == 'nl':
+        if has_chinese(prompt):
+            return extract_nl_chinese(prompt)
+        else:
+            return extract_nl_english(prompt)
+
+    # 4. auto: 自动判断
+    # 先尝试 JSON
+    try:
+        json.loads(prompt)
+        return extract_from_json(prompt)
+    except:
+        pass
+
+    # 再尝试标签组合（逗号/分号分隔，且平均长度 <= 6）
+    separators = [',', '，', ';', '；']
+    parts = [prompt]
+    for sep in separators:
+        new_parts = []
+        for p in parts:
+            new_parts.extend(p.split(sep))
+        parts = new_parts
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) >= 3:
+        total_len = sum(len(p) for p in parts)
+        avg_len = total_len / len(parts)
+        if avg_len <= 6:
+            tags = []
+            seen = set()
+            for p in parts:
+                if len(p) >= 2 and not p.isdigit() and p not in seen:
+                    seen.add(p)
+                    tags.append(p)
+            return tags
+
+    # 最后作为自然语言处理
+    if has_chinese(prompt):
+        return extract_nl_chinese(prompt)
+    else:
+        return extract_nl_english(prompt)
