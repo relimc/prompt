@@ -455,3 +455,18 @@ def remove_blacklist(keyword):
     cursor.execute('DELETE FROM tag_blacklist WHERE keyword = ?', (keyword,))
     conn.commit()
     conn.close()
+
+def update_tag_name_in_db(tag_id: int, new_name: str) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # 检查新名称是否已存在（排除自身）
+    cursor.execute('SELECT id FROM tags WHERE name = ? AND id != ?', (new_name, tag_id))
+    if cursor.fetchone():
+        conn.close()
+        return False
+    # 更新名称
+    cursor.execute('UPDATE tags SET name = ? WHERE id = ?', (new_name, tag_id))
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0

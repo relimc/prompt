@@ -774,3 +774,14 @@ async def delete_card_model(
     delete_model_link(model_name)  # 同步调用，不加 await
 
     return {"message": "删除成功"}
+
+@app.put("/api/tags/{tag_id}/name")
+async def update_tag_name(
+    tag_id: int,
+    new_name: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
+    success = update_tag_name_in_db(tag_id, new_name)
+    if not success:
+        raise HTTPException(status_code=404, detail="标签不存在或名称重复")
+    return {"message": "更新成功"}

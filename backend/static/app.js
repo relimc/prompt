@@ -549,6 +549,93 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    function showEditTagNamePopup(tagId, currentName) {
+        console.log('showEditTagNamePopup 被调用', tagId, currentName); // 调试
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.3);
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) overlay.remove();
+        });
+
+        const popup = document.createElement('div');
+        popup.style.cssText = `
+            background: white;
+            border-radius: 12px;
+            padding: 24px 28px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+            min-width: 320px;
+            max-width: 400px;
+        `;
+        popup.innerHTML = `
+            <h3 style="margin:0 0 12px 0;font-size:1.1rem;font-weight:600;">修改标签名称</h3>
+            <input type="text" id="editTagNameInput" value="${escapeHtml(currentName)}" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:0.95rem;outline:none;box-sizing:border-box;">
+            <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px;">
+                <button class="btn-popup-cancel" style="padding:6px 18px;border:none;border-radius:8px;background:#e2e8f0;color:#1e293b;cursor:pointer;font-weight:500;">取消</button>
+                <button class="btn-popup-save" style="padding:6px 18px;border:none;border-radius:8px;background:#6366f1;color:white;cursor:pointer;font-weight:500;">确定</button>
+            </div>
+        `;
+        overlay.appendChild(popup);
+        document.body.appendChild(overlay);
+
+        const input = document.getElementById('editTagNameInput');
+        input.focus();
+        input.select();
+
+        const cancelBtn = popup.querySelector('.btn-popup-cancel');
+        const saveBtn = popup.querySelector('.btn-popup-save');
+
+        cancelBtn.addEventListener('click', () => overlay.remove());
+
+        saveBtn.addEventListener('click', async function() {
+            const newName = input.value.trim();
+            if (!newName) {
+                showToast('标签名称不能为空');
+                return;
+            }
+            if (newName === currentName) {
+                overlay.remove();
+                return;
+            }
+            if (!token) {
+                showToast('请先登录');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('new_name', newName);
+            try {
+                const res = await fetch(`/api/tags/${tagId}/name`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                });
+                if (res.ok) {
+                    showToast('标签名称更新成功');
+                    overlay.remove();
+                    loadTagCloud(currentTagPage);
+                } else {
+                    const err = await res.json();
+                    showToast('更新失败: ' + (err.detail || ''));
+                }
+            } catch (e) {
+                showToast('网络错误');
+            }
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') saveBtn.click();
+        });
+    }
+
+    window.showEditTagNamePopup = showEditTagNamePopup;
+
     function renderCards(cards) {
         if (!cards || !cards.length) {
             grid.innerHTML = `<div class="empty-state" style="column-span:all; text-align:center; padding:60px 20px; color:#64748b;">🧐 没有找到卡片</div>`;
@@ -1117,21 +1204,23 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         copyText(text);
-    });    
+    });
 
     function renderTagCloud(tags) {
         if (!tags || tags.length === 0) {
-            grid.innerHTML = `<div class="empty-state" style="column-span:all; text-align:center; padding:60px 20px; color:#64748b;">☁️ 暂无标签</div>`;
+            grid.innerHTML = `<div class="empty-state" style="column-span:all; text-align:center; padding:60px 20px; color:#64748b;">☁️ 暂无标签，请先创建一些卡片</div>`;
             return;
         }
 
         let html = '';
         tags.forEach(tag => {
+            // ---------- 随机效果（云朵不规则） ----------
             const rotate = (Math.random() - 0.5) * 8;
             const translateY = (Math.random() - 0.5) * 12;
             const size = 0.8 + (tag.usage_count / 20) * 0.4;
             const fontSize = Math.min(size, 1.6);
 
+            // ---------- 图片处理 ----------
             let images = tag.images || [];
             images = [...new Set(images)];
             const total = images.length;
@@ -1167,15 +1256,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             }
 
+            // ---------- 备件库状态 ----------
+            const isInDraft = draftTags.includes(tag.name);
+            const addBtnText = isInDraft ? '➖' : '➕';
+
+            // ---------- 卡片 HTML ----------
             html += `
                 <div class="tag-card" style="transform: rotate(${rotate}deg) translateY(${translateY}px); font-size: ${fontSize}rem; width:${cardWidth}px; height:${cardHeight}px; padding:16px; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; position:relative;">
                     <div class="tag-card-images" style="display:flex; flex-direction:column; gap:4px; align-items:center; justify-content:center; width:100%; flex:1;">
                         ${imagesHtml}
                     </div>
-                    <div class="tag-card-name" style="text-align:center;font-weight:600;color:#1e293b;margin-top:8px;">${escapeHtml(tag.name)}</div>
+                    <div class="tag-card-name" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">${escapeHtml(tag.name)}</div>
                     <div class="card-actions-overlay">
-                        <button class="card-action-btn add-btn" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">➕</button>
-                        <button class="card-action-btn delete-btn" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">🗑️</button>  
+                        <button class="card-action-btn add-btn" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">${addBtnText}</button>
+                        <button class="card-action-btn delete-btn" data-tag-id="${tag.id}" data-tag-name="${escapeHtml(tag.name)}">🗑️</button>
                     </div>
                 </div>
             `;
@@ -1183,27 +1277,51 @@ document.addEventListener('DOMContentLoaded', function() {
 
         grid.innerHTML = html;
 
-        // 卡片点击事件
-        grid.querySelectorAll('.tag-card').forEach(card => {
-            card.addEventListener('click', function(e) {
-                if (e.target.closest('.card-action-btn')) return;
-                const tagName = this.querySelector('.tag-card-name').textContent;
-                searchInput.value = tagName;
-                isTagClickJump = true; // 标记为标签点击跳转
-                switchView('waterfall');
+        // ---------- 事件绑定 ----------
+
+        // 1. 点击标签名 → 弹出编辑框
+        grid.querySelectorAll('.tag-card-name').forEach(el => {
+            el.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const tagId = this.dataset.tagId;
+                const currentName = this.dataset.tagName;
+                // 调用全局函数（需在 DOMContentLoaded 外部定义）
+                if (typeof window.showEditTagNamePopup === 'function') {
+                    window.showEditTagNamePopup(tagId, currentName);
+                } else {
+                    console.error('showEditTagNamePopup 未定义');
+                }
             });
         });
 
-        // 添加按钮
+        // 2. 添加/移除备件库按钮
         grid.querySelectorAll('.add-btn').forEach(btn => {
             btn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 const tagName = this.dataset.tagName;
-                addTagToDraft(tagName);
+                const isInDraft = draftTags.includes(tagName);
+                if (isInDraft) {
+                    // 从备件库移除
+                    draftTags = draftTags.filter(t => t !== tagName);
+                    showToast(`已从备件库移除：${tagName}`);
+                } else {
+                    // 加入备件库
+                    if (!draftTags.includes(tagName)) {
+                        draftTags.push(tagName);
+                        showToast(`已加入备件库：${tagName}`);
+                        // 打开备件库抽屉
+                        if (typeof openDraftDrawer === 'function') {
+                            openDraftDrawer();
+                        }
+                    }
+                }
+                updateDraftTextarea();
+                // 刷新当前标签云（更新按钮状态）
+                loadTagCloud(currentTagPage);
             });
         });
 
-        // 删除按钮
+        // 3. 删除标签
         grid.querySelectorAll('.delete-btn').forEach(btn => {
             btn.addEventListener('click', function(e) {
                 e.stopPropagation();
@@ -1215,8 +1333,9 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
 
-        if (currentView === 'tagcloud') {        
-            window.scrollTo(0, tagCloudScrollY);    
+        // 4. 恢复滚动位置
+        if (currentView === 'tagcloud') {
+            window.scrollTo(0, tagCloudScrollY);
         }
     }
 
