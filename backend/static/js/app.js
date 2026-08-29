@@ -81,37 +81,55 @@ document.addEventListener('DOMContentLoaded', function() {
 // ---------- 全局函数 ----------
 function switchView(view) {
     if (currentView === view) return;
+
+    // 更新搜索框提示文字
+    if (view === 'waterfall') {
+        searchInput.placeholder = '输入模型名/标题/提示词/标签来搜索图片';
+    } else if (view === 'tagcloud') {
+        searchInput.placeholder = '输入标签名来搜索标签';
+    }
+
+    // 如果切换到标签云，且之前是标签点击跳转，则清空搜索框
     if (view === 'tagcloud' && isTagClickJump) {
         searchInput.value = '';
         isTagClickJump = false;
     }
-    if (currentView === 'waterfall') waterfallScrollY = window.scrollY;
-    else if (currentView === 'tagcloud') tagCloudScrollY = window.scrollY;
+
+    // 记录当前视图滚动位置（切换前）
+    if (currentView === 'waterfall') {
+        waterfallScrollY = window.scrollY;
+    } else if (currentView === 'tagcloud') {
+        tagCloudScrollY = window.scrollY;
+    }
 
     currentView = view;
     const pagination = document.getElementById('tagPagination');
-    const dToggle = document.getElementById('draftToggleBtn');
-    const lToggle = document.getElementById('listToggleBtn');
-    const dDrawer = document.getElementById('draftDrawer');
-    const lDrawer = document.getElementById('listDrawer');
+    const draftToggleBtn = document.getElementById('draftToggleBtn');
+    const listToggleBtn = document.getElementById('listToggleBtn');
+    const draftDrawer = document.getElementById('draftDrawer');
+    const listDrawer = document.getElementById('listDrawer');
 
     if (view === 'waterfall') {
         grid.classList.remove('tagcloud-mode');
-        document.getElementById('waterfallBtn').classList.add('active');
-        document.getElementById('tagcloudBtn').classList.remove('active');
+        waterfallBtn.classList.add('active');
+        tagcloudBtn.classList.remove('active');
         if (pagination) pagination.style.display = 'none';
-        if (dToggle) dToggle.style.display = 'none';
-        if (lToggle) lToggle.style.display = 'none';
-        if (dDrawer && dDrawer.classList.contains('open')) closeDraftDrawer();
-        if (lDrawer && lDrawer.classList.contains('open')) closeListDrawer();
+        if (draftToggleBtn) draftToggleBtn.style.display = 'none';
+        if (listToggleBtn) listToggleBtn.style.display = 'none';
+        if (draftDrawer && draftDrawer.classList.contains('open')) {
+            closeDraftDrawer();
+        }
+        if (listDrawer && listDrawer.classList.contains('open')) {
+            closeListDrawer();
+        }
         loadCards();
     } else if (view === 'tagcloud') {
         grid.classList.add('tagcloud-mode');
-        document.getElementById('tagcloudBtn').classList.add('active');
-        document.getElementById('waterfallBtn').classList.remove('active');
+        tagcloudBtn.classList.add('active');
+        waterfallBtn.classList.remove('active');
         if (pagination) pagination.style.display = 'block';
-        if (dToggle) dToggle.style.display = 'flex';
-        if (lToggle) lToggle.style.display = 'flex';
+        if (draftToggleBtn) draftToggleBtn.style.display = 'flex';
+        if (listToggleBtn) listToggleBtn.style.display = 'flex';
         loadTagCloud(currentTagPage);
     }
 }
