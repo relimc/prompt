@@ -813,3 +813,20 @@ body {
     transform: scale(1.08);
     box-shadow: 0 6px 24px rgba(99,102,241,0.5);
 }
+
+.list-import-btn {
+    background: #e2e8f0;
+    border: none;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+.list-import-btn:hover {
+    background: #cbd5e1;
+}

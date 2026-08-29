@@ -22,7 +22,7 @@ from backend.crud import (
     search_cards,
     get_all_tags_with_stats,
     delete_tag,
-    get_tags_paginated, get_model_link  # 添加这一行
+    get_tags_paginated, get_model_link, update_tag_name_in_db  # 添加这一行
 )
 from backend.auth import create_access_token, verify_token
 from backend.logging_config import logger
@@ -57,6 +57,9 @@ class ModelUpdateRequest(BaseModel):
     old_name: str
     new_name: str
     link: str
+
+class KeywordRequest(BaseModel):
+    keyword: str
 
 # ---------- 鉴权依赖（修正版） ----------
 def get_current_user(authorization: str = Header(None)):
@@ -723,13 +726,13 @@ def remove_blacklist_endpoint(keyword: str):
     return {"message": "移除成功"}
 
 @app.post("/api/tag-lists/whitelist")
-def add_whitelist_endpoint(keyword: str = Form(...)):
-    add_whitelist(keyword.strip())
+def add_whitelist_endpoint(req: KeywordRequest):
+    add_whitelist(req.keyword.strip())
     return {"message": "添加成功"}
 
 @app.post("/api/tag-lists/blacklist")
-def add_blacklist_endpoint(keyword: str = Form(...)):
-    add_blacklist(keyword.strip())
+def add_blacklist_endpoint(req: KeywordRequest):
+    add_blacklist(req.keyword.strip())
     return {"message": "添加成功"}
 
 
@@ -785,3 +788,22 @@ async def update_tag_name(
     if not success:
         raise HTTPException(status_code=404, detail="标签不存在或名称重复")
     return {"message": "更新成功"}
+
+from backend.crud import get_stopwords, add_stopword, remove_stopword
+from backend.tag_extractor import refresh_stopwords
+
+@app.get("/api/stopwords")
+def get_stopwords_endpoint():
+    return get_stopwords()
+
+@app.post("/api/stopwords")
+def add_stopword_endpoint(keyword: str = Form(...)):
+    add_stopword(keyword.strip())
+    refresh_stopwords()
+    return {"message": "添加成功"}
+
+@app.delete("/api/stopwords/{keyword}")
+def remove_stopword_endpoint(keyword: str):
+    remove_stopword(keyword)
+    refresh_stopwords()
+    return {"message": "移除成功"}

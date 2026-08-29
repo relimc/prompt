@@ -470,3 +470,25 @@ def update_tag_name_in_db(tag_id: int, new_name: str) -> bool:
     conn.commit()
     conn.close()
     return affected > 0
+
+def get_stopwords():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT keyword FROM stopwords ORDER BY keyword')
+    rows = cursor.fetchall()
+    conn.close()
+    return [row['keyword'] for row in rows]
+
+def add_stopword(keyword):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO stopwords (keyword) VALUES (?)', (keyword,))
+    conn.commit()
+    conn.close()
+
+def remove_stopword(keyword):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM stopwords WHERE keyword = ?', (keyword,))
+    conn.commit()
+    conn.close()

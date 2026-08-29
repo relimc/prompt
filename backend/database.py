@@ -87,6 +87,13 @@ def init_db():
     if 'prompt_type' not in columns:
         cursor.execute('ALTER TABLE cards ADD COLUMN prompt_type TEXT')
 
+    # 在 init_db 中添加
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stopwords (
+            keyword TEXT PRIMARY KEY
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
