@@ -278,6 +278,7 @@ async function handleModels(cardId) {
             return;
         }
 
+        // 规范化数据
         const normalizedModels = models.map(item => {
             if (typeof item === 'string') {
                 const name = item.replace(/\\/g, '/').split('/').pop();
@@ -297,20 +298,24 @@ async function handleModels(cardId) {
             return null;
         }).filter(Boolean);
 
+        // 获取模型链接、类型、描述
         const linkRes = await fetch('/api/model-links');
         const links = await linkRes.json();
         const linkMap = {};
         const typeMap = {};
+        const descMap = {};
         links.forEach(link => {
             linkMap[link.model_name] = link.link || '';
             typeMap[link.model_name] = link.type || '';
+            descMap[link.model_name] = link.description || '';
         });
 
+        // 创建主弹窗
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
         modal.style.display = 'flex';
         modal.innerHTML = `
-            <div class="modal-box" style="max-width:650px;">
+            <div class="modal-box" style="max-width:700px;">
                 <h2 style="text-align:center;margin-bottom:16px;">🧠 大模型列表</h2>
                 <div id="modelList" style="max-height:400px;overflow-y:auto;">
                     ${normalizedModels.map(({ name, type }) => {
@@ -318,10 +323,13 @@ async function handleModels(cardId) {
                         const savedType = typeMap[name] || type || '未知';
                         return `
                             <div class="model-row" data-model="${name}" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f1f4f9;">
-                                <div style="display:flex;align-items:center;gap:6px;flex:1;">
-                                    ${hasLink ? `<a href="${linkMap[name]}" target="_blank" class="model-link" style="color:#6366f1;text-decoration:underline;font-weight:500;">${name}</a>` : `<span class="model-name-link" data-model="${name}" style="cursor:pointer;font-weight:500;color:#1e293b;">${name}</span>`}
+                                <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+                                    ${hasLink 
+                                        ? `<a href="${linkMap[name]}" target="_blank" class="model-link" style="color:#6366f1;text-decoration:underline;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">${name}</a>` 
+                                        : `<span class="model-name-link" style="font-weight:500;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">${name}</span>`}
                                     <span class="model-type-tag" data-model="${name}" style="background:#e9edf2;padding:2px 10px;border-radius:12px;font-size:0.75rem;color:#475569;cursor:pointer;white-space:nowrap;">${savedType}</span>
                                 </div>
+                                <button class="btn-search-model" data-model="${name}" style="background:#6366f1;color:white;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem;white-space:nowrap;">搜索</button>
                                 <button class="btn-edit-row" data-model="${name}" data-card="${cardId}" style="background:#e2e8f0;color:#1e293b;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;">编辑</button>
                             </div>
                         `;
@@ -334,8 +342,17 @@ async function handleModels(cardId) {
         `;
         document.body.appendChild(modal);
 
-        // ---------- 显示编辑弹窗 ----------
-        function showEditPopup(modelName, currentLink = '', currentType = '') {
+        // ---------- 辅助：获取模型类型 ----------
+        function getModelType(modelName) {
+            if (typeMap[modelName] && typeMap[modelName] !== '') {
+                return typeMap[modelName];
+            }
+            const found = normalizedModels.find(item => item.name === modelName);
+            return found ? found.type : '未知';
+        }
+
+        // ---------- 编辑弹窗 ----------
+        function showEditPopup(modelName, currentLink = '', currentType = '', currentDescription = '') {
             const token = localStorage.getItem('token');
 
             const overlay = document.createElement('div');
@@ -352,7 +369,7 @@ async function handleModels(cardId) {
             popup.style.cssText = `
                 background: white; border-radius: 12px; padding: 24px 28px;
                 box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-                min-width: 400px; max-width: 500px;
+                min-width: 420px; max-width: 520px;
             `;
             popup.innerHTML = `
                 <h3 style="margin:0 0 12px 0;font-size:1.1rem;font-weight:600;">编辑模型</h3>
@@ -372,6 +389,10 @@ async function handleModels(cardId) {
                         <option value="ControlNet">ControlNet</option>
                         <option value="未知">未知</option>
                     </select>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:0.9rem;font-weight:500;color:#475569;">模型简述</label>
+                    <textarea id="editModelDescription" placeholder="简要描述该模型的作用" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:0.95rem;outline:none;box-sizing:border-box;resize:vertical;min-height:60px;">${escapeHtml(currentDescription)}</textarea>
                 </div>
                 <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px;">
                     <button class="btn-popup-delete" style="padding:6px 18px;border:none;border-radius:8px;background:#ef4444;color:white;cursor:pointer;font-weight:500;">删除</button>
@@ -394,6 +415,7 @@ async function handleModels(cardId) {
             }
 
             const linkInput = document.getElementById('editModelLink');
+            const descInput = document.getElementById('editModelDescription');
 
             // 取消
             popup.querySelector('.btn-popup-cancel').addEventListener('click', () => overlay.remove());
@@ -421,6 +443,7 @@ async function handleModels(cardId) {
                             row.remove();
                             delete linkMap[modelName];
                             delete typeMap[modelName];
+                            delete descMap[modelName];
                             const remaining = modal.querySelectorAll('.model-row');
                             if (remaining.length === 0) {
                                 modal.querySelector('#modelList').innerHTML = '<div style="text-align:center;padding:20px;color:#94a3b8;">暂无模型</div>';
@@ -447,11 +470,13 @@ async function handleModels(cardId) {
                     return;
                 }
                 const newType = typeSelect.value;
+                const newDescription = descInput.value.trim();
 
                 try {
                     const linkFormData = new FormData();
                     linkFormData.append('model_name', modelName);
                     linkFormData.append('link', newLink);
+                    linkFormData.append('description', newDescription);
                     const linkRes = await fetch('/api/model-links', {
                         method: 'POST',
                         body: linkFormData
@@ -471,26 +496,39 @@ async function handleModels(cardId) {
 
                     showToast('更新成功');
                     overlay.remove();
+
+                    // 实时更新当前行
                     const row = modal.querySelector(`.model-row[data-model="${modelName}"]`);
                     if (row) {
-                        const nameEl = row.querySelector('.model-name-link, .model-link');
-                        if (nameEl) {
-                            if (nameEl.tagName === 'A') {
-                                nameEl.href = newLink;
-                            } else {
+                        linkMap[modelName] = newLink;
+                        typeMap[modelName] = newType;
+                        descMap[modelName] = newDescription;
+
+                        // 更新名称显示
+                        const nameContainer = row.querySelector('div:first-child');
+                        const oldNameEl = nameContainer.querySelector('.model-link, .model-name-link');
+                        if (oldNameEl) {
+                            if (newLink) {
                                 const newLinkEl = document.createElement('a');
                                 newLinkEl.href = newLink;
                                 newLinkEl.target = '_blank';
                                 newLinkEl.className = 'model-link';
                                 newLinkEl.style.cssText = 'color:#6366f1;text-decoration:underline;font-weight:500;';
                                 newLinkEl.textContent = modelName;
-                                nameEl.replaceWith(newLinkEl);
+                                oldNameEl.replaceWith(newLinkEl);
+                            } else {
+                                const newNameEl = document.createElement('span');
+                                newNameEl.className = 'model-name-link';
+                                newNameEl.style.cssText = 'font-weight:500;color:#1e293b;';
+                                newNameEl.textContent = modelName;
+                                oldNameEl.replaceWith(newNameEl);
                             }
                         }
+                        // 更新类型标签
                         const typeTag = row.querySelector('.model-type-tag');
-                        if (typeTag) typeTag.textContent = newType;
-                        linkMap[modelName] = newLink;
-                        typeMap[modelName] = newType;
+                        if (typeTag) {
+                            typeTag.textContent = newType;
+                        }
                     }
                 } catch (e) {
                     showToast('更新失败: ' + e.message);
@@ -504,36 +542,41 @@ async function handleModels(cardId) {
             });
         }
 
-        // 辅助函数：获取模型类型
-        function getModelType(modelName) {
-            if (typeMap[modelName] && typeMap[modelName] !== '') {
-                return typeMap[modelName];
-            }
-            const found = normalizedModels.find(item => item.name === modelName);
-            return found ? found.type : '未知';
-        }
+        // ---------- 绑定事件 ----------
 
-        // 绑定编辑按钮
+        // 1. 编辑按钮
         modal.querySelectorAll('.btn-edit-row').forEach(btn => {
             btn.addEventListener('click', function() {
                 const modelName = this.dataset.model;
                 const currentLink = linkMap[modelName] || '';
                 const currentType = getModelType(modelName);
-                showEditPopup(modelName, currentLink, currentType);
+                const currentDescription = descMap[modelName] || '';
+                showEditPopup(modelName, currentLink, currentType, currentDescription);
             });
         });
 
-        // 模型名称点击（无链接时）
-        modal.querySelectorAll('.model-name-link').forEach(el => {
-            el.addEventListener('click', function() {
+        // 2. 搜索按钮
+        modal.querySelectorAll('.btn-search-model').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
                 const modelName = this.dataset.model;
-                const currentLink = linkMap[modelName] || '';
-                const currentType = getModelType(modelName);
-                showEditPopup(modelName, currentLink, currentType);
+                if (modelName) {
+                    searchInput.value = modelName;
+                    // 关键修复：触发 input 事件，使清除按钮显示
+                    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    isTagClickJump = true;
+                    modal.remove();
+                    document.body.style.overflow = '';
+                    if (currentView === 'waterfall') {
+                        loadCards();
+                    } else {
+                        switchView('waterfall');
+                    }
+                }
             });
         });
 
-        // ---------- 类型编辑（修正：选项与编辑弹窗一致） ----------
+        // 3. 类型标签点击（编辑类型）
         modal.querySelectorAll('.model-type-tag').forEach(tag => {
             tag.addEventListener('click', function(e) {
                 e.stopPropagation();
@@ -551,7 +594,6 @@ async function handleModels(cardId) {
                     min-width: 140px;
                 `;
                 const select = document.createElement('select');
-                // 完整选项列表（与编辑弹窗一致）
                 const options = ['Checkpoint', 'LoRA', 'VAE', 'CLIP', 'Embedding', 'Upscale', 'ControlNet', '未知'];
                 options.forEach(opt => {
                     const option = document.createElement('option');

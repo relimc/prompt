@@ -10,10 +10,11 @@ def get_db_connection():
     return conn
 
 def init_db():
+    """初始化数据库：创建所有表，并执行必要的迁移"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # cards 表（含 models 字段）
+    # 1. cards 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS cards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,16 +25,20 @@ def init_db():
             workflow_path TEXT,
             tags TEXT,
             models TEXT,
+            prompt_type TEXT DEFAULT 'auto',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # 迁移：为 cards 表添加 prompt_type 字段（如果不存在）
     cursor.execute("PRAGMA table_info(cards)")
     columns = [row[1] for row in cursor.fetchall()]
+    if 'prompt_type' not in columns:
+        cursor.execute('ALTER TABLE cards ADD COLUMN prompt_type TEXT DEFAULT "auto"')
     if 'models' not in columns:
         cursor.execute('ALTER TABLE cards ADD COLUMN models TEXT')
 
-    # tags 表
+    # 2. tags 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +47,8 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # card_tags 表
+
+    # 3. card_tags 关联表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS card_tags (
             card_id INTEGER,
@@ -53,41 +59,39 @@ def init_db():
         )
     ''')
 
-    # model_links 表（含 type 字段）
+    # 4. model_links 表（含 description 字段）
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS model_links (
             model_name TEXT PRIMARY KEY,
             link TEXT,
             type TEXT,
+            description TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # 检查并添加 type 列（如果表已存在但无此列）
+    # 迁移：为 model_links 表添加 description 字段（如果不存在）
     cursor.execute("PRAGMA table_info(model_links)")
     columns = [row[1] for row in cursor.fetchall()]
+    if 'description' not in columns:
+        cursor.execute('ALTER TABLE model_links ADD COLUMN description TEXT')
     if 'type' not in columns:
         cursor.execute('ALTER TABLE model_links ADD COLUMN type TEXT')
 
-    # 在 init_db 中添加
+    # 5. tag_whitelist 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tag_whitelist (
-            keyword TEXT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            keyword TEXT PRIMARY KEY
         )
     ''')
+
+    # 6. tag_blacklist 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tag_blacklist (
-            keyword TEXT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            keyword TEXT PRIMARY KEY
         )
     ''')
 
-    cursor.execute("PRAGMA table_info(cards)")
-    columns = [row[1] for row in cursor.fetchall()]
-    if 'prompt_type' not in columns:
-        cursor.execute('ALTER TABLE cards ADD COLUMN prompt_type TEXT')
-
-    # 在 init_db 中添加
+    # 7. stopwords 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS stopwords (
             keyword TEXT PRIMARY KEY

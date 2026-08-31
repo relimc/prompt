@@ -18,6 +18,44 @@ document.addEventListener('DOMContentLoaded', function() {
     if (waterfallBtn) waterfallBtn.addEventListener('click', () => switchView('waterfall'));
     if (tagcloudBtn) tagcloudBtn.addEventListener('click', () => switchView('tagcloud'));
 
+
+    const searchClearBtn = document.getElementById('searchClearBtn');
+
+    // 显示/隐藏清空按钮
+    function toggleClearButton() {
+        if (searchInput.value.trim()) {
+            searchClearBtn.style.display = 'block';
+        } else {
+            searchClearBtn.style.display = 'none';
+        }
+    }
+
+    // 监听输入事件
+    searchInput.addEventListener('input', function() {
+        toggleClearButton();
+        // 原有的搜索逻辑（瀑布流或标签云）
+        if (currentView === 'waterfall') {
+            loadCards();
+        } else if (currentView === 'tagcloud') {
+            loadTagCloud();
+        }
+    });
+
+    // 清空按钮点击事件
+    searchClearBtn.addEventListener('click', function() {
+        searchInput.value = '';
+        toggleClearButton();
+        // 根据当前视图触发搜索（加载所有卡片/标签）
+        if (currentView === 'waterfall') {
+            loadCards();
+        } else if (currentView === 'tagcloud') {
+            loadTagCloud();
+        }
+    });
+
+    // 初始化时检查是否需要显示清空按钮
+    toggleClearButton();
+
     // ---------- 标签名称跳转 ----------
     // 事件委托：点击标签卡片（非按钮区域）跳转瀑布流
     grid.addEventListener('click', function(e) {

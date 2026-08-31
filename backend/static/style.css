@@ -859,3 +859,42 @@ body {
 .list-import-btn:hover {
     background: #cbd5e1;
 }
+
+/* 搜索框包装器 */
+.search-wrapper {
+    position: relative;
+    flex: 1;
+    max-width: 450px;
+    margin: 0 auto;
+}
+.search-box {
+    width: 100%;
+    padding: 10px 36px 10px 20px;
+    border-radius: 40px;
+    border: 1px solid #d1d5db;
+    background: white;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border 0.2s, box-shadow 0.2s;
+}
+.search-box:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+}
+.search-clear-btn {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color 0.2s;
+}
+.search-clear-btn:hover {
+    color: #1e293b;
+}

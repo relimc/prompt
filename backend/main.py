@@ -538,8 +538,12 @@ def get_model_links_endpoint():
     return get_model_links()
 
 @app.post("/api/model-links")
-def set_model_link(model_name: str = Form(...), link: str = Form(...)):
-    save_model_link(model_name, link)
+async def set_model_link(
+    model_name: str = Form(...),
+    link: str = Form(...),
+    description: str = Form('')
+):
+    save_model_link(model_name, link, description)
     return {"message": "保存成功"}
 
 @app.delete("/api/model-links/{model_name}")

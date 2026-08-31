@@ -318,33 +318,22 @@ def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
 def get_model_link(model_name: str):
     conn = get_db_connection()
     cursor = conn.cursor()
-    # 先检查 type 列是否存在，但更简单：查询所有列，避免列缺失错误
-    try:
-        cursor.execute('SELECT link, type FROM model_links WHERE model_name = ?', (model_name,))
-        row = cursor.fetchone()
-    except sqlite3.OperationalError:
-        # 如果 type 列不存在，只查询 link
-        cursor.execute('SELECT link FROM model_links WHERE model_name = ?', (model_name,))
-        row = cursor.fetchone()
-        if row:
-            return {'link': row['link'], 'type': ''}
-        return None
-    if row:
-        return dict(row)
-    return None
+    cursor.execute('SELECT link, type, description FROM model_links WHERE model_name = ?', (model_name,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 def update_model_type(model_name: str, model_type: str):
     conn = get_db_connection()
     cursor = conn.cursor()
-    # 先检查是否存在
-    cursor.execute('SELECT link FROM model_links WHERE model_name = ?', (model_name,))
+    cursor.execute('SELECT link, description FROM model_links WHERE model_name = ?', (model_name,))
     row = cursor.fetchone()
     if row:
         cursor.execute('UPDATE model_links SET type = ?, updated_at = CURRENT_TIMESTAMP WHERE model_name = ?',
                        (model_type, model_name))
     else:
-        cursor.execute('INSERT INTO model_links (model_name, link, type, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                       (model_name, '', model_type))
+        cursor.execute('INSERT INTO model_links (model_name, link, type, description, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
+                       (model_name, '', model_type, ''))
     conn.commit()
     conn.close()
 
@@ -386,24 +375,18 @@ def extract_models_from_image_path(image_path):
 def get_model_links():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT model_name, link, type FROM model_links ORDER BY model_name')
+    cursor.execute('SELECT model_name, link, type, description FROM model_links ORDER BY model_name')
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
-def save_model_link(model_name: str, link: str):
+def save_model_link(model_name: str, link: str, description: str = ''):
     conn = get_db_connection()
     cursor = conn.cursor()
-    # 保留现有 type 字段
     cursor.execute('''
-        INSERT OR REPLACE INTO model_links (model_name, link, type, updated_at)
-        VALUES (
-            ?,
-            ?,
-            COALESCE((SELECT type FROM model_links WHERE model_name = ?), ''),
-            CURRENT_TIMESTAMP
-        )
-    ''', (model_name, link, model_name))
+        INSERT OR REPLACE INTO model_links (model_name, link, type, description, updated_at)
+        VALUES (?, ?, COALESCE((SELECT type FROM model_links WHERE model_name = ?), ''), ?, CURRENT_TIMESTAMP)
+    ''', (model_name, link, model_name, description))
     conn.commit()
     conn.close()
 

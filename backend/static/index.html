@@ -16,7 +16,10 @@
                 我的图集
                 <span class="ai-badge-title">AI</span>
             </div>
-            <input class="search-box" type="text" id="searchInput" placeholder="输入模型名/标题/提示词/标签来搜索图片" autocomplete="off" />
+            <div class="search-wrapper">
+                <input class="search-box" type="text" id="searchInput" placeholder="输入模型名/标题/提示词/标签来搜索图片" autocomplete="off" />
+                <button class="search-clear-btn" id="searchClearBtn" style="display: none;" title="清空搜索">✕</button>
+            </div>
             <div class="view-toggle">
                 <button class="view-btn active" data-view="waterfall" id="waterfallBtn">🌊 瀑布流</button>
                 <button class="view-btn" data-view="tagcloud" id="tagcloudBtn">☁️ 标签云</button>
