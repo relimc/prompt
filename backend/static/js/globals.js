@@ -21,7 +21,28 @@ let listDrawer = null;
 let listToggleBtn = null;
 
 // ---------- 工具函数 ----------
+let _toastTimer = null;
+let _toastElement = null;
+
 function showToast(msg) {
+    // 如果已有 toast，直接更新内容和计时器
+    if (_toastElement) {
+        _toastElement.textContent = msg;
+        // 重置计时器
+        clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(() => {
+            _toastElement.style.opacity = '0';
+            setTimeout(() => {
+                if (_toastElement && _toastElement.parentNode) {
+                    _toastElement.parentNode.removeChild(_toastElement);
+                    _toastElement = null;
+                }
+            }, 300);
+        }, 4000);
+        return;
+    }
+
+    // 创建新 toast
     const toast = document.createElement('div');
     toast.style.cssText = `
         position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
@@ -32,10 +53,16 @@ function showToast(msg) {
     `;
     toast.textContent = msg;
     document.body.appendChild(toast);
+    _toastElement = toast;
     requestAnimationFrame(() => toast.style.opacity = '1');
-    setTimeout(() => {
+    _toastTimer = setTimeout(() => {
         toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+                _toastElement = null;
+            }
+        }, 300);
     }, 4000);
 }
 

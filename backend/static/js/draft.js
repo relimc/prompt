@@ -1,7 +1,62 @@
 /**
- * draft.js - 备件库 + 黑白名单 + 停用词管理（含导入和小 i 提示）
+ * draft.js - 备件库 + 黑白名单 + 停用词管理（含导入和悬浮提示）
  * 依赖 globals.js（提供 draftTags, showToast, copyText 等）
  */
+
+// ---------- 全局 tooltip ----------
+let _infoTooltip = null;
+
+function getInfoTooltip() {
+    if (!_infoTooltip) {
+        _infoTooltip = document.createElement('div');
+        _infoTooltip.className = 'info-tooltip';
+        _infoTooltip.style.cssText = `
+            position: fixed;
+            background: #1e293b;
+            color: #f1f5f9;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            max-width: 300px;
+            white-space: normal;
+            word-wrap: break-word;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 100000;
+            pointer-events: none;
+            display: none;
+            transition: opacity 0.15s;
+            line-height: 1.5;
+        `;
+        document.body.appendChild(_infoTooltip);
+    }
+    return _infoTooltip;
+}
+
+function showInfoTooltip(text, targetEl) {
+    const tooltip = getInfoTooltip();
+    tooltip.textContent = text;
+    const rect = targetEl.getBoundingClientRect();
+    let top = rect.bottom + 6;
+    let left = rect.left + rect.width / 2 - tooltip.offsetWidth / 2;
+    // 防止溢出右边界
+    if (left + tooltip.offsetWidth > window.innerWidth - 10) {
+        left = window.innerWidth - tooltip.offsetWidth - 10;
+    }
+    if (left < 10) left = 10;
+    // 如果下方空间不足，显示在上方
+    if (top + tooltip.offsetHeight > window.innerHeight - 10) {
+        top = rect.top - tooltip.offsetHeight - 6;
+    }
+    tooltip.style.top = top + 'px';
+    tooltip.style.left = left + 'px';
+    tooltip.style.display = 'block';
+    tooltip.style.opacity = '1';
+}
+
+function hideInfoTooltip() {
+    const tooltip = getInfoTooltip();
+    tooltip.style.display = 'none';
+}
 
 // ---------- 备件库 ----------
 function updateDraftTextarea() {
@@ -140,12 +195,30 @@ async function addTagList(keyword, type, refresh = true) {
 }
 
 // ---------- 导入功能 ----------
+// ---------- 导入功能（悬停提示改为悬浮于按钮下方，且内容根据类型定制） ----------
 function initImportButtons() {
     document.querySelectorAll('.list-import-btn').forEach(btn => {
+        // 移除原生 title，避免干扰
+        btn.removeAttribute('title');
+
+        // 根据 data-type 确定名称
+        const typeMap = {
+            whitelist: '白名单',
+            blacklist: '黑名单',
+            stopword: '停用词'
+        };
+        const typeName = typeMap[btn.dataset.type] || '词语';
+
+        // 悬停时显示 tooltip（在按钮下方）
         btn.addEventListener('mouseenter', function() {
-            window.showToast('支持导入 .txt 文件，词语以 , ，；； / 、 等分隔');
+            const tip = `支持导入以逗号分隔${typeName}的 .txt 文件`;
+            showInfoTooltip(tip, this);
+        });
+        btn.addEventListener('mouseleave', function() {
+            hideInfoTooltip();
         });
 
+        // 点击导入（逻辑不变）
         btn.addEventListener('click', function() {
             const type = this.dataset.type;
             const fileInput = document.createElement('input');
@@ -196,14 +269,25 @@ function initImportButtons() {
     });
 }
 
-// ---------- 小 i 提示 ----------
+// ---------- 小 i 悬浮提示 ----------
 function initInfoIcons() {
     document.querySelectorAll('.info-icon').forEach(el => {
-        el.addEventListener('mouseenter', function() {
-            const tip = this.dataset.tip;
-            if (tip) window.showToast(tip);
-        });
+        el.removeEventListener('mouseenter', showInfo);
+        el.removeEventListener('mouseleave', hideInfo);
+        el.addEventListener('mouseenter', showInfo);
+        el.addEventListener('mouseleave', hideInfo);
     });
+
+    function showInfo(e) {
+        const tip = this.dataset.tip;
+        if (tip) {
+            showInfoTooltip(tip, this);
+        }
+    }
+
+    function hideInfo() {
+        hideInfoTooltip();
+    }
 }
 
 // ---------- 初始化 ----------
@@ -253,6 +337,7 @@ function initDraft() {
     }
     if (listClose) listClose.addEventListener('click', closeListDrawer);
 
+    // 点击外部关闭
     document.addEventListener('click', function(e) {
         const dDrawer = document.getElementById('draftDrawer');
         const lDrawer = document.getElementById('listDrawer');

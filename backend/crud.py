@@ -7,6 +7,8 @@ from backend.tag_extractor import extract_tags_from_prompt
 # ---------- 标签辅助函数 ----------
 
 def get_or_create_tag(tag_name: str):
+    """获取或创建标签，名称统一转为小写"""
+    tag_name = tag_name.lower().strip()  # 统一小写
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id FROM tags WHERE name = ?', (tag_name,))
@@ -34,27 +36,36 @@ def link_card_tag(card_id: int, tag_id: int):
 def sync_card_tags(card_id: int, manual_tags: list, extracted_tags: list, positive_prompt: str = None):
     """同步卡片标签：手动标签直接保留（并加入白名单），自动提取标签过滤黑名单，白名单中的词若出现在提示词中则强制添加"""
     # 获取白名单和黑名单
-    whitelist = get_whitelist()
-    blacklist = get_blacklist()
+    whitelist = [w.lower() for w in get_whitelist()]  # 统一小写比较
+    blacklist = [b.lower() for b in get_blacklist()]
 
-    # 处理手动标签：加入白名单（去重）
-    manual_set = set(manual_tags)
-    for tag in manual_set:
-        if tag and tag not in whitelist:
-            add_whitelist(tag)
+    # 处理手动标签：转为小写，去重，加入白名单
+    manual_set = set()
+    for tag in manual_tags:
+        if tag:
+            tag_lower = tag.lower().strip()
+            if tag_lower:
+                manual_set.add(tag_lower)
+                # 加入白名单（如果不在）
+                if tag_lower not in whitelist:
+                    add_whitelist(tag_lower)
 
-    # 处理自动提取标签：过滤黑名单
-    extracted_set = set(extracted_tags)
-    filtered_extracted = [tag for tag in extracted_set if tag not in blacklist]
+    # 处理自动提取标签：转为小写，过滤黑名单
+    extracted_set = set()
+    for tag in extracted_tags:
+        if tag:
+            tag_lower = tag.lower().strip()
+            if tag_lower and tag_lower not in blacklist:
+                extracted_set.add(tag_lower)
 
     # 初始合并
-    all_tags = set(manual_set) | set(filtered_extracted)
+    all_tags = manual_set | extracted_set
 
     # 白名单强制添加：如果 positive_prompt 存在，检查白名单中的词是否出现在提示词中
     if positive_prompt:
+        prompt_lower = positive_prompt.lower()
         for wl in whitelist:
-            # 使用简单的包含检测（可改为正则边界匹配）
-            if wl in positive_prompt and wl not in all_tags:
+            if wl in prompt_lower and wl not in all_tags:
                 all_tags.add(wl)
 
     # 更新数据库关联
@@ -429,6 +440,7 @@ def get_blacklist():
     return [row['keyword'] for row in rows]
 
 def add_whitelist(keyword):
+    keyword = keyword.lower().strip()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO tag_whitelist (keyword) VALUES (?)', (keyword,))
@@ -436,6 +448,7 @@ def add_whitelist(keyword):
     conn.close()
 
 def add_blacklist(keyword):
+    keyword = keyword.lower().strip()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO tag_blacklist (keyword) VALUES (?)', (keyword,))
@@ -480,6 +493,7 @@ def get_stopwords():
     return [row['keyword'] for row in rows]
 
 def add_stopword(keyword):
+    keyword = keyword.lower().strip()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO stopwords (keyword) VALUES (?)', (keyword,))

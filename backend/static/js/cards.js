@@ -689,10 +689,11 @@ function showCandidateModal(candidates) {
         const textSpan = document.createElement('span');
         const displayText = text.length > 100 ? text.slice(0, 100) + '...' : text;
         textSpan.textContent = displayText;
-        textSpan.title = text;
+        // 移除 title 属性，只保留鼠标悬停时调用 showToast
+        // textSpan.title = text;  // 删除该行，避免浏览器原生提示
         textSpan.style.cssText = 'flex:1;margin-right:12px;word-break:break-all;font-size:0.9rem;cursor:help;';
         textSpan.addEventListener('mouseenter', function() {
-            showToast(this.title);
+            showToast(this.textContent === displayText ? text : displayText);
         });
 
         const btnGroup = document.createElement('div');
@@ -741,6 +742,7 @@ function showCandidateModal(candidates) {
         list.appendChild(item);
     });
 
+    // 底部操作栏（下拉框 + 确定/取消）
     const existingAction = document.getElementById('candidateActions');
     if (existingAction) existingAction.remove();
 

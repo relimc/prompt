@@ -1,4 +1,5 @@
 // ---------- 标签云 ----------
+// ---------- 标签云 ----------
 async function loadTagCloud(page = 1) {
     currentTagPage = page;
     const keyword = searchInput.value.trim();
@@ -16,7 +17,7 @@ async function loadTagCloud(page = 1) {
         renderTagCloud(data.tags);
         renderTagPagination(data.page, data.total_pages);
     } catch (e) {
-        window.showToast('加载标签云失败');
+        showToast('加载标签云失败');
         console.error(e);
     }
 }
@@ -88,30 +89,32 @@ function renderTagCloud(tags) {
 
     grid.innerHTML = html;
 
-    // 绑定 add-btn
+    // ---------- 绑定 add-btn（局部更新，不刷新整个页面） ----------
     grid.querySelectorAll('.add-btn').forEach(btn => {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
             const tagName = this.dataset.tagName;
             const isInDraft = draftTags.includes(tagName);
             if (isInDraft) {
+                // 从备件库移除
                 draftTags = draftTags.filter(t => t !== tagName);
-                window.showToast(`已从备件库移除：${tagName}`);
+                showToast(`已从备件库移除：${tagName}`);
+                this.textContent = '➕';
             } else {
-                if (!draftTags.includes(tagName)) {
-                    draftTags.push(tagName);
-                    window.showToast(`已加入备件库：${tagName}`);
-                    if (typeof window.openDraftDrawer === 'function') {
-                        window.openDraftDrawer();
-                    }
+                // 加入备件库
+                draftTags.push(tagName);
+                showToast(`已加入备件库：${tagName}`);
+                this.textContent = '➖';
+                if (typeof openDraftDrawer === 'function') {
+                    openDraftDrawer();
                 }
             }
             updateDraftTextarea();
-            loadTagCloud(currentTagPage);
+            // 不刷新页面，仅更新按钮状态
         });
     });
 
-    // 绑定 edit-btn
+    // ---------- 绑定 edit-btn ----------
     grid.querySelectorAll('.edit-btn').forEach(btn => {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -130,6 +133,7 @@ function renderTagCloud(tags) {
     }
 }
 
+// ---------- 分页 ----------
 function renderTagPagination(currentPage, totalPages) {
     const container = document.getElementById('tagPagination');
     if (!container) return;
@@ -165,11 +169,10 @@ function renderTagPagination(currentPage, totalPages) {
     });
 }
 
+// ---------- 删除标签 ----------
 async function deleteTag(tagId) {
     if (!token) {
-        openLoginModal(() => {
-            deleteTag(tagId);
-        });
+        openLoginModal(() => deleteTag(tagId));
         return;
     }
     if (currentView === 'tagcloud') {
@@ -181,16 +184,16 @@ async function deleteTag(tagId) {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
-            window.showToast('删除标签成功');
+            showToast('删除标签成功');
             if (currentView === 'tagcloud') {
                 loadTagCloud();
             }
         } else {
             const err = await res.json();
-            window.showToast('删除失败: ' + (err.detail || ''));
+            showToast('删除失败: ' + (err.detail || ''));
         }
     } catch (e) {
-        window.showToast('网络错误');
+        showToast('网络错误');
         console.error(e);
     }
 }

@@ -19,20 +19,24 @@ document.addEventListener('DOMContentLoaded', function() {
     if (tagcloudBtn) tagcloudBtn.addEventListener('click', () => switchView('tagcloud'));
 
     // ---------- 标签名称跳转 ----------
-    if (grid) {
-        grid.addEventListener('click', function(e) {
-            const nameEl = e.target.closest('.tag-card-name');
-            if (nameEl) {
-                e.stopPropagation();
-                const tagName = nameEl.dataset.tagName;
-                if (tagName) {
-                    searchInput.value = tagName;
-                    isTagClickJump = true;
-                    switchView('waterfall');
-                }
+    // 事件委托：点击标签卡片（非按钮区域）跳转瀑布流
+    grid.addEventListener('click', function(e) {
+        const tagCard = e.target.closest('.tag-card');
+        if (!tagCard) return;
+        // 如果点击的是按钮，忽略
+        if (e.target.closest('.add-btn') || e.target.closest('.edit-btn')) {
+            return;
+        }
+        const nameEl = tagCard.querySelector('.tag-card-name');
+        if (nameEl) {
+            const tagName = nameEl.dataset.tagName;
+            if (tagName) {
+                searchInput.value = tagName;
+                isTagClickJump = true;
+                switchView('waterfall');
             }
-        });
-    }
+        }
+    });
 
     // ---------- 卡片交互（工作流、提示词等） ----------
     if (grid) {
