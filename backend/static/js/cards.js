@@ -968,7 +968,9 @@ function initImageUpload() {
 }
 
 // ---------- 初始化 ----------
+// ---------- 初始化卡片模块 ----------
 function initCards() {
+    // 取消按钮
     const cancelBtn = document.getElementById('editCancelBtn');
     if (cancelBtn) {
         cancelBtn.addEventListener('click', function() {
@@ -977,14 +979,16 @@ function initCards() {
         });
     }
 
+    // 表单提交
     const form = document.getElementById('editForm');
     if (form) {
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
-            if (!token) {
+            if (!window.token && !localStorage.getItem('token')) {
                 openLoginModal(() => form.dispatchEvent(new Event('submit', { cancelable: true })));
                 return;
             }
+            const token = localStorage.getItem('token') || window.token;
             const formData = new FormData(this);
             const url = currentCardId ? `/api/cards/${currentCardId}` : '/api/cards';
             const method = currentCardId ? 'PUT' : 'POST';
@@ -995,8 +999,8 @@ function initCards() {
                     body: formData
                 });
                 if (res.status === 401) {
-                    token = null;
                     localStorage.removeItem('token');
+                    window.token = null;
                     showToast('登录已过期，请重新登录');
                     openLoginModal(() => {});
                     document.getElementById('editModal').style.display = 'none';
@@ -1018,14 +1022,16 @@ function initCards() {
         });
     }
 
+    // 删除按钮
     const deleteBtn = document.getElementById('editDeleteBtn');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', async function() {
             if (!currentCardId) return;
-            if (!token) {
+            if (!window.token && !localStorage.getItem('token')) {
                 openLoginModal(() => deleteBtn.click());
                 return;
             }
+            const token = localStorage.getItem('token') || window.token;
             if (!confirm('确定要删除这张卡片吗？')) return;
             try {
                 const res = await fetch(`/api/cards/${currentCardId}`, {
@@ -1046,16 +1052,27 @@ function initCards() {
         });
     }
 
+    // 图片上传提取
     initImageUpload();
 
-    document.addEventListener('keydown', function(e) {
+    // ===== 快捷键：Ctrl+Alt+P =====
+    // 移除旧监听，避免重复绑定
+    document.removeEventListener('keydown', handleKeydown);
+    document.addEventListener('keydown', handleKeydown);
+
+    function handleKeydown(e) {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key === 'p') {
             e.preventDefault();
-            if (token) openEditModal(null);
-            else openLoginModal(() => openEditModal(null));
+            const token = localStorage.getItem('token') || window.token;
+            if (token) {
+                openEditModal(null);
+            } else {
+                openLoginModal(() => openEditModal(null));
+            }
         }
-    });
+    }
 
+    // 搜索
     if (searchInput) {
         searchInput.addEventListener('input', function() {
             if (currentView === 'waterfall') loadCards();
@@ -1063,6 +1080,7 @@ function initCards() {
         });
     }
 
+    // 候选模态框点击背景关闭
     const candidateModal = document.getElementById('candidateModal');
     if (candidateModal) {
         candidateModal.addEventListener('click', function(e) {
