@@ -37,41 +37,41 @@
                 <span>📋 标签名单库</span>
                 <button class="list-close">✕</button>
             </div>
-            <div class="list-body">
+            <div class="list-body" style="display:flex; flex-direction:column; height:100%; padding:16px 24px;">
                 <!-- 白名单 -->
-                <div class="list-section">
-                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <div class="list-section" style="flex:1; min-height:0; display:flex; flex-direction:column; margin-bottom:8px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-shrink:0;">
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <h4 style="margin:0;color:#059669;">白名单</h4>
+                            <h4 style="margin:0;color:#059669; font-size:0.95rem;">白名单</h4>
                             <span class="info-icon" data-tip="加入白名单的标签将强制出现在标签云中，不受自动提取影响。">ⓘ</span>
                         </div>
                         <button class="list-import-btn" data-type="whitelist" title="导入白名单">📥</button>
                     </div>
-                    <div id="whitelistContainer" style="display:flex;flex-wrap:wrap;gap:6px;min-height:40px;"></div>
+                    <div id="whitelistContainer" style="flex:1; overflow-y:auto; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; min-height:40px; border:1px solid #e2e8f0; border-radius:6px; padding:8px;"></div>
                 </div>
 
                 <!-- 黑名单 -->
-                <div class="list-section">
-                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <div class="list-section" style="flex:1; min-height:0; display:flex; flex-direction:column; margin-bottom:8px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-shrink:0;">
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <h4 style="margin:0;color:#dc2626;">黑名单</h4>
+                            <h4 style="margin:0;color:#dc2626; font-size:0.95rem;">黑名单</h4>
                             <span class="info-icon" data-tip="加入黑名单的标签将被自动过滤，不会出现在标签云中。">ⓘ</span>
                         </div>
                         <button class="list-import-btn" data-type="blacklist" title="导入黑名单">📥</button>
                     </div>
-                    <div id="blacklistContainer" style="display:flex;flex-wrap:wrap;gap:6px;min-height:40px;"></div>
+                    <div id="blacklistContainer" style="flex:1; overflow-y:auto; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; min-height:40px; border:1px solid #e2e8f0; border-radius:6px; padding:8px;"></div>
                 </div>
 
                 <!-- 停用词 -->
-                <div class="list-section">
-                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <div class="list-section" style="flex:1; min-height:0; display:flex; flex-direction:column;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-shrink:0;">
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <h4 style="margin:0;color:#8b5cf6;">停用词</h4>
+                            <h4 style="margin:0;color:#8b5cf6; font-size:0.95rem;">停用词</h4>
                             <span class="info-icon" data-tip="停用词在标签提取阶段被过滤，用于去除无意义词汇。">ⓘ</span>
                         </div>
                         <button class="list-import-btn" data-type="stopword" title="导入停用词">📥</button>
                     </div>
-                    <div id="stopwordsContainer" style="display:flex;flex-wrap:wrap;gap:6px;min-height:40px;"></div>
+                    <div id="stopwordsContainer" style="flex:1; overflow-y:auto; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; min-height:40px; border:1px solid #e2e8f0; border-radius:6px; padding:8px;"></div>
                 </div>
             </div>
         </div>
