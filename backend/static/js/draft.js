@@ -167,17 +167,29 @@ function renderTagList(container, keywords, type) {
 
 async function addTagList(keyword, type, refresh = true) {
     let url;
+    let isForm = false;
     if (type === 'whitelist') url = '/api/tag-lists/whitelist';
     else if (type === 'blacklist') url = '/api/tag-lists/blacklist';
-    else if (type === 'stopword') url = '/api/stopwords';
+    else if (type === 'stopword') { url = '/api/stopwords'; isForm = true; }
     else return;
 
     try {
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `keyword=${encodeURIComponent(keyword)}`
-        });
+        let options;
+        if (isForm) {
+            options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `keyword=${encodeURIComponent(keyword)}`
+            };
+        } else {
+            options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keyword })
+            };
+        }
+        const res = await fetch(url, options);
+        const data = await res.json();
         if (res.ok) {
             if (refresh) {
                 window.showToast('添加成功');
@@ -185,11 +197,11 @@ async function addTagList(keyword, type, refresh = true) {
             }
             return true;
         } else {
-            if (refresh) window.showToast('添加失败');
+            window.showToast('添加失败: ' + (data.detail || data.message || '未知错误'));
             return false;
         }
     } catch (e) {
-        if (refresh) window.showToast('网络错误');
+        window.showToast('网络错误: ' + e.message);
         return false;
     }
 }

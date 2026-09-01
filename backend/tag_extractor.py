@@ -1,7 +1,9 @@
 """
-标签提取模块（增强版）
+标签提取模块（优化自然语言词组提取）
 - 支持指定提示词类型：'auto', 'tags', 'nl', 'json'
-- 混合提示词自动分段处理：标签式部分直接拆分，自然语言部分提取实词
+- 自然语言：提取连续的实词序列（名词/动词/形容词）作为短语
+- 保留动词单独出现，禁止名词或形容词单独出现
+- 无数量限制，尽可能多地提取
 - 停用词从数据库加载，支持动态刷新
 """
 
@@ -11,72 +13,73 @@ import logging
 import sqlite3
 import jieba
 import jieba.posseg as pseg
-import yake
 from collections import Counter
 from backend.config import Config
+from backend.database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
 # ---------- 停用词缓存 ----------
 _STOPWORDS = None
 
-def _get_stopwords_from_db():
-    """从数据库查询停用词"""
-    conn = sqlite3.connect(Config.DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT keyword FROM stopwords ORDER BY keyword')
-    rows = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
-
 def load_stopwords():
-    """加载停用词到缓存"""
     global _STOPWORDS
     try:
-        words = _get_stopwords_from_db()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT keyword FROM stopwords ORDER BY keyword')
+        rows = cursor.fetchall()
+        conn.close()
+        words = [row['keyword'] for row in rows]
         _STOPWORDS = set(words)
         logger.info(f"从数据库加载停用词 {len(_STOPWORDS)} 个")
-    except sqlite3.OperationalError:
-        # 表可能不存在，创建空集合
-        logger.warning("stopwords 表不存在，使用空停用词集合")
-        _STOPWORDS = set()
     except Exception as e:
         logger.error(f"加载停用词失败: {e}")
         _STOPWORDS = set()
     return _STOPWORDS
 
 def get_stopwords():
-    """获取停用词集合（懒加载）"""
     global _STOPWORDS
     if _STOPWORDS is None:
         load_stopwords()
     return _STOPWORDS
 
 def refresh_stopwords():
-    """外部调用刷新停用词"""
     load_stopwords()
 
-# ---------- 初始化 yake ----------
-yake_extractor = yake.KeywordExtractor(lan="en", n=2, top=500)
-
+# ---------- 辅助函数 ----------
 def has_chinese(text):
     return bool(re.search(r'[\u4e00-\u9fff]', text))
 
-def _calc_max_tags(text_len: int) -> int:
-    min_tags = 5
-    max_tags = 80
-    step_chars = 40
-    step_count = 5
-    tags = min_tags + (text_len // step_chars) * step_count
-    return max(min_tags, min(tags, max_tags))
+def split_sentences(text):
+    """按中文标点拆分句子"""
+    sentences = re.split(r'[。；：！？\n]+', text)
+    return [s.strip() for s in sentences if s.strip()]
 
-def extract_nl_chinese(prompt: str) -> list:
-    """中文自然语言提取：合并'形容词+的+名词'，保留名词/动词/形容词"""
+def extract_nl_phrases(prompt: str) -> list:
+    """
+    从自然语言中提取连续的实词序列（名词/动词/形容词）
+    保留动词单独出现，禁止名词或形容词单独出现
+    两阶段提取：先提取词组，再提取遗漏的单个实词
+    """
     stopwords = get_stopwords()
-    try:
-        words = pseg.cut(prompt)
+    # 定义实词词性（名词、动词、形容词）
+    content_tags = {'n', 'nr', 'ns', 'nt', 'nz', 'v', 'a', 'eng'}
+
+    # 按标点拆分句子
+    sentences = split_sentences(prompt)
+    all_phrases = []
+    used_indices = set()  # 记录已使用的词索引（跨句子）
+
+    for sent in sentences:
+        if not sent:
+            continue
+        words = pseg.cut(sent)
         tokens = list(words)
-        collected = []
+        if not tokens:
+            continue
+
+        # 第一阶段：扫描连续的实词序列（词组）
         i = 0
         while i < len(tokens):
             word, flag = tokens[i]
@@ -84,116 +87,111 @@ def extract_nl_chinese(prompt: str) -> list:
             if not word or len(word) < 2:
                 i += 1
                 continue
-            if flag == 'a' and i + 2 < len(tokens):
-                next_word, next_flag = tokens[i + 1]
-                next2_word, next2_flag = tokens[i + 2]
-                if next_word == '的' and next2_flag in ('n', 'nr', 'ns', 'nt', 'nz'):
-                    combined = word + next_word + next2_word
-                    if combined not in stopwords:
-                        collected.append(combined)
-                    i += 3
+            if word in stopwords:
+                i += 1
+                continue
+
+            # 如果是名词或形容词，必须与相邻实词组合，不能单独出现
+            if flag in {'n', 'nr', 'ns', 'nt', 'nz', 'a', 'eng'}:
+                # 尝试向后组合（最长匹配）
+                phrase = word
+                j = i + 1
+                consumed = [i]
+                while j < len(tokens):
+                    next_word, next_flag = tokens[j]
+                    next_word = next_word.strip()
+                    # 如果下一个词是实词且不是停用词，则加入短语
+                    if (next_flag in content_tags and next_word not in stopwords and
+                        len(next_word) >= 2 and not next_word.isdigit()):
+                        phrase += next_word
+                        consumed.append(j)
+                        j += 1
+                    # 处理“的”、“式”、“级”、“型”等连接词（允许加入）
+                    elif next_word in {'的', '式', '级', '型'} and j + 1 < len(tokens):
+                        # 检查后面的词是否是实词
+                        next2_word, next2_flag = tokens[j + 1]
+                        if next2_flag in content_tags and next2_word not in stopwords:
+                            phrase += next_word + next2_word
+                            consumed.append(j)
+                            consumed.append(j + 1)
+                            j += 2
+                        else:
+                            break
+                    else:
+                        break
+                # 如果向后组合后短语长度增加，则保留
+                if len(phrase) > len(word):
+                    # 记录使用的索引
+                    for idx in consumed:
+                        used_indices.add(idx)
+                    all_phrases.append(phrase)
+                    i = j
                     continue
-            if flag in ('n', 'v', 'a') and word not in stopwords:
-                collected.append(word)
-            i += 1
-        seen = set()
-        unique = []
-        for w in collected:
-            if w not in seen:
-                seen.add(w)
-                unique.append(w)
-        logger.info(f"中文自然语言提取: {unique}")
-        return unique
-    except Exception as e:
-        logger.error(f"中文自然语言提取失败: {e}")
-        return []
-
-def extract_nl_english(prompt: str) -> list:
-    """英文自然语言提取：先尝试保留短整体，否则使用 yake 提取短语，并补充单词拆分"""
-    stopwords = get_stopwords()
-    separators = [',', '，', ';', '；']
-    # 如果无分隔符且词数 <= 4，视为短标签整体保留
-    if not any(sep in prompt for sep in separators):
-        words = prompt.split()
-        if len(words) <= 4:
-            return [prompt.strip()]
-    # 否则提取关键词
-    tags_set = set()
-    # 1. yake 提取短语
-    try:
-        results = yake_extractor.extract_keywords(prompt)
-        for kw, score in results:
-            kw = kw.strip()
-            if len(kw) < 2 or kw in stopwords:
+                # 如果没有向后组合，尝试向前组合（避免遗漏前面的名词）
+                if i > 0 and i - 1 not in used_indices:
+                    prev_word, prev_flag = tokens[i - 1]
+                    if prev_flag in content_tags and prev_word not in stopwords:
+                        phrase = prev_word + word
+                        used_indices.add(i - 1)
+                        used_indices.add(i)
+                        all_phrases.append(phrase)
+                # 如果既不能向后也不能向前，则跳过（不单独保留名词/形容词）
+                i += 1
                 continue
-            tags_set.add(kw)
-    except Exception as e:
-        logger.error(f"yake 提取失败: {e}")
-    # 2. 补充单词拆分（过滤停用词和短词）
-    try:
-        # 拆分为单词，去除非字母字符
-        words = re.findall(r'\b[a-zA-Z]+\b', prompt)
-        for w in words:
-            w_lower = w.lower()
-            if len(w) >= 2 and w_lower not in stopwords:
-                tags_set.add(w)
-    except Exception as e:
-        logger.error(f"单词拆分失败: {e}")
-    tags = list(tags_set)
-    # 排序（按长度降序优先）
-    tags.sort(key=lambda x: (len(x), x.lower()), reverse=True)
-    logger.info(f"英文自然语言提取（去重后）: {tags}")
-    return tags
 
-def extract_mixed(prompt: str) -> list:
-    """混合提示词处理：分段识别并分别提取"""
-    # 按句子结束符分割（. ? !）
-    sentences = re.split(r'[.?!]+', prompt)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    all_tags = []
-    for sent in sentences:
-        # 检测是否为标签式片段：包含至少 3 个逗号/分号分隔的短词
-        separators = [',', '，', ';', '；']
-        parts = [sent]
-        for sep in separators:
-            new_parts = []
-            for p in parts:
-                new_parts.extend(p.split(sep))
-            parts = new_parts
-        parts = [p.strip() for p in parts if p.strip()]
-        if len(parts) >= 3:
-            total_len = sum(len(p) for p in parts)
-            avg_len = total_len / len(parts)
-            if avg_len <= 6:
-                # 标签式片段：直接拆分
-                tags = []
-                seen = set()
-                stopwords = get_stopwords()
-                for p in parts:
-                    if len(p) < 2 or p.isdigit() or p in seen or p in stopwords:
+            # 如果是动词，允许单独出现，但也尝试与后面名词组合
+            if flag == 'v':
+                # 检查后面是否接名词
+                if i + 1 < len(tokens):
+                    next_word, next_flag = tokens[i + 1]
+                    if next_flag in {'n', 'nr', 'ns', 'nt', 'nz'} and next_word not in stopwords:
+                        phrase = word + next_word
+                        used_indices.add(i)
+                        used_indices.add(i + 1)
+                        all_phrases.append(phrase)
+                        i += 2
                         continue
-                    seen.add(p)
-                    tags.append(p)
-                all_tags.extend(tags)
+                # 否则单独保留动词（排除常见助动词）
+                if word not in {'是', '有', '在', '了', '的', '着', '和', '与', '或'}:
+                    used_indices.add(i)
+                    all_phrases.append(word)
+                i += 1
                 continue
-        # 否则按自然语言处理
-        if has_chinese(sent):
-            tags = extract_nl_chinese(sent)
-        else:
-            tags = extract_nl_english(sent)
-        all_tags.extend(tags)
-    # 去重保持顺序
+
+            # 其他词性（如介词、连词等）跳过
+            i += 1
+
+        # 第二阶段：从当前句子中提取遗漏的单个实词（仅限未被使用的词）
+        for idx, (word, flag) in enumerate(tokens):
+            if idx in used_indices:
+                continue
+            word = word.strip()
+            if not word or len(word) < 2:
+                continue
+            if word in stopwords:
+                continue
+            # 如果是名词、动词或形容词，且未被使用，则作为单个词添加
+            if flag in {'n', 'nr', 'ns', 'nt', 'nz', 'v', 'a', 'eng'}:
+                # 动词过滤常见助动词
+                if flag == 'v' and word in {'是', '有', '在', '了', '的', '着', '和', '与', '或'}:
+                    continue
+                used_indices.add(idx)
+                all_phrases.append(word)
+
+    # 去重并过滤停用词（再次确保）
     seen = set()
     unique = []
-    for t in all_tags:
-        if t not in seen:
-            seen.add(t)
-            unique.append(t)
-    logger.info(f"混合提示词提取结果: {unique}")
+    for p in all_phrases:
+        p_lower = p.lower()
+        if p_lower not in seen and p not in stopwords:
+            seen.add(p_lower)
+            unique.append(p)
+
+    logger.info(f"自然语言提取词组（共 {len(unique)} 个）: {unique[:10] if unique else '无'}")
     return unique
 
+# ---------- 主提取函数 ----------
 def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
-    """主提取函数"""
     if not prompt or not isinstance(prompt, str):
         return []
     prompt = prompt.strip()
@@ -202,8 +200,11 @@ def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
 
     stopwords = get_stopwords()
 
+    # 1. JSON 格式
     if prompt_type == 'json':
         return extract_from_json(prompt)
+
+    # 2. 标签组合（tags）
     if prompt_type == 'tags':
         separators = [',', '，', ';', '；']
         parts = [prompt]
@@ -220,17 +221,20 @@ def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
                 seen.add(p)
                 tags.append(p)
         return tags
-    if prompt_type == 'nl':
-        return extract_nl_chinese(prompt) if has_chinese(prompt) else extract_nl_english(prompt)
 
-    # auto 模式：先尝试 JSON，再尝试标签组合，否则混合处理
+    # 3. 自然语言（nl）
+    if prompt_type == 'nl':
+        return extract_nl_phrases(prompt)
+
+    # 4. auto 模式
+    # 先尝试 JSON
     try:
         json.loads(prompt)
         return extract_from_json(prompt)
     except:
         pass
 
-    # 尝试标签组合检测（全局）
+    # 检测是否为标签组合（逗号分隔且平均长度 <= 6）
     separators = [',', '，', ';', '；']
     parts = [prompt]
     for sep in separators:
@@ -249,11 +253,12 @@ def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
                 if len(p) >= 2 and not p.isdigit() and p not in seen and p not in stopwords:
                     seen.add(p)
                     tags.append(p)
-            return [tag.lower() for tag in tags] if tags else []
+            return tags
 
-    # 否则按混合模式处理
-    return extract_mixed(prompt)
+    # 否则作为自然语言处理
+    return extract_nl_phrases(prompt)
 
+# ---------- JSON 提取（不变） ----------
 def extract_from_json(json_str: str) -> list:
     try:
         data = json.loads(json_str)

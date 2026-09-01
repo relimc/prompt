@@ -731,8 +731,6 @@ function showCandidateModal(candidates) {
         const textSpan = document.createElement('span');
         const displayText = text.length > 100 ? text.slice(0, 100) + '...' : text;
         textSpan.textContent = displayText;
-        // 移除 title 属性，只保留鼠标悬停时调用 showToast
-        // textSpan.title = text;  // 删除该行，避免浏览器原生提示
         textSpan.style.cssText = 'flex:1;margin-right:12px;word-break:break-all;font-size:0.9rem;cursor:help;';
         textSpan.addEventListener('mouseenter', function() {
             showToast(this.textContent === displayText ? text : displayText);
@@ -784,7 +782,7 @@ function showCandidateModal(candidates) {
         list.appendChild(item);
     });
 
-    // 底部操作栏（下拉框 + 确定/取消）
+    // 底部操作栏
     const existingAction = document.getElementById('candidateActions');
     if (existingAction) existingAction.remove();
 
@@ -792,9 +790,19 @@ function showCandidateModal(candidates) {
     actionDiv.id = 'candidateActions';
     actionDiv.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0;';
 
+    // ===== 关键修复：阻止 actionDiv 内部点击冒泡 =====
+    actionDiv.addEventListener('click', function(e) {
+        e.stopPropagation();
+    });
+
+    // 下拉框
     const typeSelect = document.createElement('select');
     typeSelect.id = 'candidateTypeSelect';
-    typeSelect.style.cssText = 'padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.9rem;';
+    typeSelect.style.cssText = 'padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.9rem;position:relative;z-index:1000;pointer-events:auto;';
+    // 同样阻止下拉框点击冒泡
+    typeSelect.addEventListener('click', function(e) {
+        e.stopPropagation();
+    });
     const options = [
         { value: 'auto', label: '默认（自动判断）' },
         { value: 'tags', label: '标签组合' },
@@ -811,14 +819,36 @@ function showCandidateModal(candidates) {
 
     const btnDiv = document.createElement('div');
     btnDiv.style.cssText = 'display:flex;gap:12px;';
+    // 阻止按钮点击冒泡（已有 stopPropagation，但再加一层保障）
     const confirmBtn = document.createElement('button');
     confirmBtn.textContent = '确定';
     confirmBtn.className = 'btn-primary';
     confirmBtn.style.cssText = 'padding:8px 24px;';
+    confirmBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (!selectedPositive && !selectedNegative) {
+            showToast('请至少选择一个提示词');
+            return;
+        }
+        const selectedType = document.getElementById('candidateTypeSelect').value;
+        const positiveInput = document.getElementById('editPositive');
+        const negativeInput = document.getElementById('editNegative');
+        if (selectedPositive) positiveInput.value = selectedPositive;
+        if (selectedNegative) negativeInput.value = selectedNegative;
+        document.getElementById('editPromptType').value = selectedType;
+        closeCandidateModal();
+        showToast('已应用提示词');
+    });
+
     const cancelBtn = document.createElement('button');
     cancelBtn.textContent = '取消';
     cancelBtn.className = 'btn-secondary';
     cancelBtn.style.cssText = 'padding:8px 24px;';
+    cancelBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        closeCandidateModal();
+    });
+
     btnDiv.appendChild(confirmBtn);
     btnDiv.appendChild(cancelBtn);
     actionDiv.appendChild(btnDiv);
@@ -853,23 +883,6 @@ function showCandidateModal(candidates) {
             }
         });
     }
-
-    confirmBtn.addEventListener('click', function() {
-        if (!selectedPositive && !selectedNegative) {
-            showToast('请至少选择一个提示词');
-            return;
-        }
-        const selectedType = document.getElementById('candidateTypeSelect').value;
-        const positiveInput = document.getElementById('editPositive');
-        const negativeInput = document.getElementById('editNegative');
-        if (selectedPositive) positiveInput.value = selectedPositive;
-        if (selectedNegative) negativeInput.value = selectedNegative;
-        document.getElementById('editPromptType').value = selectedType;
-        closeCandidateModal();
-        showToast('已应用提示词');
-    });
-
-    cancelBtn.addEventListener('click', closeCandidateModal);
 
     updateCandidateButtons();
     modal.style.display = 'flex';
