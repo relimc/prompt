@@ -3,12 +3,13 @@ import json
 from datetime import datetime
 from backend.database import get_db_connection
 from backend.tag_extractor import extract_tags_from_prompt
+from backend.tag_extractor import extract_tags_from_prompt, is_tag_combo_prompt
 
 # ---------- 标签辅助函数 ----------
 
 def get_or_create_tag(tag_name: str):
-    """获取或创建标签，名称统一转为小写"""
-    tag_name = tag_name.lower().strip()  # 统一小写
+    """获取或创建标签，名称统一转为小写（为保持兼容，沿用原逻辑）"""
+    tag_name = tag_name.lower().strip()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id FROM tags WHERE name = ?', (tag_name,))
@@ -33,42 +34,17 @@ def link_card_tag(card_id: int, tag_id: int):
     conn.commit()
     conn.close()
 
-def sync_card_tags(card_id: int, manual_tags: list, extracted_tags: list, positive_prompt: str = None):
-    """同步卡片标签：手动标签直接保留（并加入白名单），自动提取标签过滤黑名单，白名单中的词若出现在提示词中则强制添加"""
-    # 获取白名单和黑名单
-    whitelist = [w.lower() for w in get_whitelist()]  # 统一小写比较
-    blacklist = [b.lower() for b in get_blacklist()]
-
-    # 处理手动标签：转为小写，去重，加入白名单
-    manual_set = set()
-    for tag in manual_tags:
-        if tag:
-            tag_lower = tag.lower().strip()
-            if tag_lower:
-                manual_set.add(tag_lower)
-                # 加入白名单（如果不在）
-                if tag_lower not in whitelist:
-                    add_whitelist(tag_lower)
-
-    # 处理自动提取标签：转为小写，过滤黑名单
-    extracted_set = set()
-    for tag in extracted_tags:
-        if tag:
-            tag_lower = tag.lower().strip()
-            if tag_lower and tag_lower not in blacklist:
-                extracted_set.add(tag_lower)
-
-    # 初始合并
-    all_tags = manual_set | extracted_set
-
-    # 白名单强制添加：如果 positive_prompt 存在，检查白名单中的词是否出现在提示词中
-    if positive_prompt:
-        prompt_lower = positive_prompt.lower()
-        for wl in whitelist:
-            if wl in prompt_lower and wl not in all_tags:
-                all_tags.add(wl)
-
-    # 更新数据库关联
+# ---------- 新增：直接保存标签（用于 tags 模式） ----------
+def save_tags_directly(card_id: int, tag_names: list):
+    """
+    将标签名称列表直接保存到卡片关联，不经过任何过滤或附加逻辑。
+    标签名称原样保存（包括大小写、空格等），但为了统一存储，tags表保留小写版本以防重复，
+    但关联时使用小写去重，保留原始显示名？这里我们沿用get_or_create_tag的小写化。
+    但为了原样保留，我们改为直接插入tags表，不转小写，但会导致大小写不同视为不同标签。
+    考虑到用户可能输入大小写混合，建议统一小写存储，但显示时显示原始？标签云显示的是tags.name。
+    通常为了规范，统一小写是好的。我们就沿用小写化，但不过滤停用词等。
+    如果用户输入"光, 影"，则得到"光","影"。
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     # 删除旧关联
@@ -78,9 +54,57 @@ def sync_card_tags(card_id: int, manual_tags: list, extracted_tags: list, positi
         cursor.execute('UPDATE tags SET usage_count = usage_count - 1 WHERE id = ?', (tid,))
     cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
     conn.commit()
+
+    # 添加新标签
+    for name in tag_names:
+        name = name.strip()
+        if not name:
+            continue
+        tag_id = get_or_create_tag(name)  # get_or_create_tag 已转小写
+        link_card_tag(card_id, tag_id)
     conn.close()
 
-    # 添加新关联
+def sync_card_tags(card_id: int, manual_tags: list, extracted_tags: list, positive_prompt: str = None):
+    """同步卡片标签：手动标签直接保留（并加入白名单），自动提取标签过滤黑名单，白名单中的词若出现在提示词中则强制添加"""
+    from backend.crud import get_whitelist, get_blacklist, add_whitelist
+    whitelist = [w.lower() for w in get_whitelist()]
+    blacklist = [b.lower() for b in get_blacklist()]
+
+    manual_set = set()
+    for tag in manual_tags:
+        if tag:
+            tag_lower = tag.lower().strip()
+            if tag_lower:
+                manual_set.add(tag_lower)
+                if tag_lower not in whitelist:
+                    add_whitelist(tag_lower)
+
+    extracted_set = set()
+    for tag in extracted_tags:
+        if tag:
+            tag_lower = tag.lower().strip()
+            if tag_lower and tag_lower not in blacklist:
+                extracted_set.add(tag_lower)
+
+    all_tags = manual_set | extracted_set
+
+    if positive_prompt:
+        prompt_lower = positive_prompt.lower()
+        for wl in whitelist:
+            if wl in prompt_lower and wl not in all_tags:
+                all_tags.add(wl)
+
+    # 更新数据库关联
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT tag_id FROM card_tags WHERE card_id = ?', (card_id,))
+    old_tag_ids = [row['tag_id'] for row in cursor.fetchall()]
+    for tid in old_tag_ids:
+        cursor.execute('UPDATE tags SET usage_count = usage_count - 1 WHERE id = ?', (tid,))
+    cursor.execute('DELETE FROM card_tags WHERE card_id = ?', (card_id,))
+    conn.commit()
+    conn.close()
+
     for tag_name in all_tags:
         if tag_name:
             tag_id = get_or_create_tag(tag_name)
@@ -157,14 +181,28 @@ def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, 
     conn.commit()
     conn.close()
 
-    # 处理标签
-    manual_tags = []
-    if tags:
-        manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
-    extracted = []
-    if positive_prompt:
-        extracted = extract_tags_from_prompt(positive_prompt, prompt_type)
-    sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
+    # ---------- 处理标签 ----------
+    # 判断是否应直接保存标签（标签组合模式 或 auto 检测为标签组合）
+    if prompt_type == 'tags' or (prompt_type == 'auto' and is_tag_combo_prompt(positive_prompt)):
+        separators = [',', '，', ';', '；']
+        parts = [positive_prompt] if positive_prompt else []
+        for sep in separators:
+            new_parts = []
+            for p in parts:
+                new_parts.extend(p.split(sep))
+            parts = new_parts
+        tag_names = [p.strip() for p in parts if p.strip()]
+        save_tags_directly(card_id, tag_names)
+    else:
+        # 其他模式：使用原有逻辑（手动标签 + 自动提取）
+        manual_tags = []
+        if tags:
+            manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
+        extracted = []
+        if positive_prompt:
+            extracted = extract_tags_from_prompt(positive_prompt, prompt_type)
+        sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
+
     return card_id
 
 def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None, prompt_type='auto'):
@@ -187,12 +225,44 @@ def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_pa
     conn.close()
 
     if affected and positive_prompt:
-        manual_tags = []
-        if tags:
-            manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
-        extracted = extract_tags_from_prompt(positive_prompt, prompt_type)
-        sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
+        if prompt_type == 'tags' or (prompt_type == 'auto' and is_tag_combo_prompt(positive_prompt)):
+            separators = [',', '，', ';', '；']
+            parts = [positive_prompt]
+            for sep in separators:
+                new_parts = []
+                for p in parts:
+                    new_parts.extend(p.split(sep))
+                parts = new_parts
+            tag_names = [p.strip() for p in parts if p.strip()]
+            save_tags_directly(card_id, tag_names)
+        else:
+            manual_tags = []
+            if tags:
+                manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
+            extracted = extract_tags_from_prompt(positive_prompt, prompt_type)
+            sync_card_tags(card_id, manual_tags, extracted, positive_prompt)
+
     return affected > 0
+
+def detect_tags_mode(prompt: str) -> bool:
+    """检测提示词是否为标签组合模式（用于 auto 模式）"""
+    if not prompt or not isinstance(prompt, str):
+        return False
+    # 检测分隔符
+    separators = [',', '，', ';', '；']
+    parts = [prompt]
+    for sep in separators:
+        new_parts = []
+        for p in parts:
+            new_parts.extend(p.split(sep))
+        parts = new_parts
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) >= 3:
+        total_len = sum(len(p) for p in parts)
+        avg_len = total_len / len(parts)
+        if avg_len <= 6:
+            return True
+    return False
 
 def delete_card(card_id: int):
     conn = get_db_connection()

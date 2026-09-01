@@ -205,6 +205,7 @@ def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
         return extract_from_json(prompt)
 
     # 2. 标签组合（tags）
+    # 2. 标签组合（tags）
     if prompt_type == 'tags':
         separators = [',', '，', ';', '；']
         parts = [prompt]
@@ -217,7 +218,8 @@ def extract_tags_from_prompt(prompt: str, prompt_type: str = 'auto') -> list:
         tags = []
         seen = set()
         for p in parts:
-            if len(p) >= 2 and not p.isdigit() and p not in seen and p not in stopwords:
+            # 显式标签模式：只去重，保留所有用户输入的词（不过滤停用词、不限制长度）
+            if p not in seen:
                 seen.add(p)
                 tags.append(p)
         return tags
@@ -296,3 +298,28 @@ def extract_from_json(json_str: str) -> list:
 def reload_stopwords():
     refresh_stopwords()
     return len(get_stopwords())
+
+def is_tag_combo_prompt(prompt: str) -> bool:
+    """检测 prompt 是否为标签组合（多个逗号分隔且平均长度较短）"""
+    if not prompt:
+        return False
+    # 尝试 JSON
+    try:
+        json.loads(prompt)
+        return False
+    except:
+        pass
+    separators = [',', '，', ';', '；']
+    parts = [prompt]
+    for sep in separators:
+        new_parts = []
+        for p in parts:
+            new_parts.extend(p.split(sep))
+        parts = new_parts
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) >= 3:
+        total_len = sum(len(p) for p in parts)
+        avg_len = total_len / len(parts)
+        if avg_len <= 6:
+            return True
+    return False

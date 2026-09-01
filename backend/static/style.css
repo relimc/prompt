@@ -898,3 +898,20 @@ body {
 .search-clear-btn:hover {
     color: #1e293b;
 }
+.list-import-btn {
+    font-size: 1.2rem;  /* 确保图标清晰 */
+    line-height: 1;
+    background: #e2e8f0;
+    border: none;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.list-import-btn:hover {
+    background: #cbd5e1;
+}

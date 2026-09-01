@@ -6,6 +6,9 @@
 // ---------- 全局 tooltip ----------
 let _infoTooltip = null;
 
+// 用于存储当前列表数据（供导出使用）
+window._tagListData = { whitelist: [], blacklist: [], stopwords: [] };
+
 function getInfoTooltip() {
     if (!_infoTooltip) {
         _infoTooltip = document.createElement('div');
@@ -95,12 +98,87 @@ async function loadTagLists() {
         const blacklist = await blackRes.json();
         const stopwords = await stopRes.json();
 
+        // 保存到全局
+        window._tagListData = { whitelist, blacklist, stopwords };
+
         renderTagList(document.getElementById('whitelistContainer'), whitelist, 'whitelist');
         renderTagList(document.getElementById('blacklistContainer'), blacklist, 'blacklist');
         renderTagList(document.getElementById('stopwordsContainer'), stopwords, 'stopword');
     } catch (e) {
         console.error('加载名单库失败', e);
     }
+}
+
+function exportTagList(type) {
+    const data = window._tagListData || {};
+    let keywords = [];
+    if (type === 'whitelist') keywords = data.whitelist || [];
+    else if (type === 'blacklist') keywords = data.blacklist || [];
+    else if (type === 'stopword') keywords = data.stopwords || [];
+    else return;
+
+    if (keywords.length === 0) {
+        window.showToast('没有可导出的数据');
+        return;
+    }
+    const text = keywords.join(', ');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${type}_list.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    window.showToast(`导出 ${keywords.length} 个词条成功`);
+}
+
+function triggerImport(btn) {
+    const type = btn.dataset.type;
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.txt';
+    fileInput.style.display = 'none';
+    document.body.appendChild(fileInput);
+
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) {
+            document.body.removeChild(fileInput);
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = async function(ev) {
+            const content = ev.target.result;
+            const separators = /[,，;；\/、\s]+/;
+            const words = content.split(separators)
+                .map(w => w.trim())
+                .filter(w => w.length > 0);
+            if (words.length === 0) {
+                window.showToast('文件中未找到有效词语');
+                document.body.removeChild(fileInput);
+                return;
+            }
+            const uniqueWords = [...new Set(words)];
+            window.showToast(`正在导入 ${uniqueWords.length} 个词语...`);
+            let successCount = 0, failCount = 0;
+            for (const word of uniqueWords) {
+                try {
+                    await addTagList(word, type, false);
+                    successCount++;
+                } catch (e) {
+                    failCount++;
+                }
+            }
+            loadTagLists();
+            window.showToast(`导入完成：成功 ${successCount} 个，失败 ${failCount} 个`);
+            document.body.removeChild(fileInput);
+        };
+        reader.readAsText(file, 'UTF-8');
+    });
+
+    fileInput.click();
 }
 
 function renderTagList(container, keywords, type) {
@@ -207,13 +285,13 @@ async function addTagList(keyword, type, refresh = true) {
 }
 
 // ---------- 导入功能 ----------
-// ---------- 导入功能（悬停提示改为悬浮于按钮下方，且内容根据类型定制） ----------
-function initImportButtons() {
+function initActionButtons() {
     document.querySelectorAll('.list-import-btn').forEach(btn => {
-        // 移除原生 title，避免干扰
-        btn.removeAttribute('title');
+        btn.removeAttribute('title'); // 移除原生title
+        btn.textContent = '⚙️';
+        btn.title = '管理名单（导入/导出）';
+        btn.removeAttribute('data-original-title'); // 如有旧title则移除
 
-        // 根据 data-type 确定名称
         const typeMap = {
             whitelist: '白名单',
             blacklist: '黑名单',
@@ -221,62 +299,56 @@ function initImportButtons() {
         };
         const typeName = typeMap[btn.dataset.type] || '词语';
 
-        // 悬停时显示 tooltip（在按钮下方）
-        btn.addEventListener('mouseenter', function() {
-            const tip = `支持导入以逗号分隔${typeName}的 .txt 文件`;
-            showInfoTooltip(tip, this);
-        });
-        btn.addEventListener('mouseleave', function() {
-            hideInfoTooltip();
-        });
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            // 关闭其他菜单
+            document.querySelectorAll('.action-menu').forEach(m => m.remove());
 
-        // 点击导入（逻辑不变）
-        btn.addEventListener('click', function() {
-            const type = this.dataset.type;
-            const fileInput = document.createElement('input');
-            fileInput.type = 'file';
-            fileInput.accept = '.txt';
-            fileInput.style.display = 'none';
-            document.body.appendChild(fileInput);
-
-            fileInput.addEventListener('change', function(e) {
-                const file = e.target.files[0];
-                if (!file) {
-                    document.body.removeChild(fileInput);
-                    return;
-                }
-                const reader = new FileReader();
-                reader.onload = async function(ev) {
-                    const content = ev.target.result;
-                    const separators = /[,，;；\/、\s]+/;
-                    const words = content.split(separators)
-                        .map(w => w.trim())
-                        .filter(w => w.length > 0);
-                    if (words.length === 0) {
-                        window.showToast('文件中未找到有效词语');
-                        document.body.removeChild(fileInput);
-                        return;
-                    }
-                    const uniqueWords = [...new Set(words)];
-                    window.showToast(`正在导入 ${uniqueWords.length} 个词语...`);
-                    let successCount = 0;
-                    let failCount = 0;
-                    for (const word of uniqueWords) {
-                        try {
-                            await addTagList(word, type, false);
-                            successCount++;
-                        } catch (e) {
-                            failCount++;
-                        }
-                    }
-                    loadTagLists();
-                    window.showToast(`导入完成：成功 ${successCount} 个，失败 ${failCount} 个`);
-                    document.body.removeChild(fileInput);
-                };
-                reader.readAsText(file, 'UTF-8');
+            const rect = this.getBoundingClientRect();
+            const menu = document.createElement('div');
+            menu.className = 'action-menu';
+            menu.style.cssText = `
+                position: fixed;
+                top: ${rect.bottom + 6}px;
+                left: ${rect.left}px;
+                background: white;
+                border: 1px solid #d1d5db;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 100000;
+                display: flex;
+                flex-direction: column;
+                min-width: 100px;
+                padding: 4px 0;
+            `;
+            const importBtn = document.createElement('button');
+            importBtn.textContent = '📥 导入';
+            importBtn.style.cssText = 'padding:8px 16px;border:none;background:none;cursor:pointer;text-align:left;font-size:0.9rem;';
+            importBtn.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                menu.remove();
+                triggerImport(btn);
             });
+            const exportBtn = document.createElement('button');
+            exportBtn.textContent = '📤 导出';
+            exportBtn.style.cssText = 'padding:8px 16px;border:none;background:none;cursor:pointer;text-align:left;font-size:0.9rem;';
+            exportBtn.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                menu.remove();
+                exportTagList(btn.dataset.type);
+            });
+            menu.appendChild(importBtn);
+            menu.appendChild(exportBtn);
+            document.body.appendChild(menu);
 
-            fileInput.click();
+            // 点击外部关闭菜单
+            const closeMenu = (ev) => {
+                if (!menu.contains(ev.target) && ev.target !== btn) {
+                    menu.remove();
+                    document.removeEventListener('click', closeMenu);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeMenu), 10);
         });
     });
 }
@@ -362,7 +434,7 @@ function initDraft() {
     });
 
     // 初始化导入按钮和小 i 提示
-    initImportButtons();
+    initActionButtons();
     initInfoIcons();
 }
 
