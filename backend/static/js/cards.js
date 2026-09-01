@@ -1024,7 +1024,19 @@ function initCards() {
                     showToast(currentCardId ? '更新成功' : '创建成功');
                     document.getElementById('editModal').style.display = 'none';
                     currentCardId = null;
-                    loadCards();
+
+                    // 清空搜索框，确保显示所有卡片
+                    if (searchInput) {
+                        searchInput.value = '';
+                        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+
+                    // 切换到瀑布流并加载
+                    if (typeof switchView === 'function') {
+                        switchView('waterfall');
+                    } else {
+                        loadCards();
+                    }
                 } else {
                     const err = await res.json();
                     showToast('操作失败: ' + (err.detail || ''));
