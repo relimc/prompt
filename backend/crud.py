@@ -168,21 +168,22 @@ from datetime import datetime
 from backend.database import get_db_connection
 from backend.tag_extractor import extract_tags_from_prompt
 
-def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None, prompt_type='auto'):
+def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, thumbnail_path=None, workflow_path=None, models=None, prompt_type='auto'):
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
     models_json = json.dumps(models) if models else None
     cursor.execute('''
-        INSERT INTO cards (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models, prompt_type, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, prompt_type, now, now))
+        INSERT INTO cards (title, positive_prompt, negative_prompt, tags, image_path, thumbnail_path, workflow_path, models, prompt_type, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (title, positive_prompt, negative_prompt, tags, image_path, thumbnail_path, workflow_path, models_json, prompt_type, now, now))
     card_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
-    # ---------- 处理标签 ----------
+    # 处理标签（使用之前的逻辑）
     # 判断是否应直接保存标签（标签组合模式 或 auto 检测为标签组合）
+    from backend.tag_extractor import is_tag_combo_prompt
     if prompt_type == 'tags' or (prompt_type == 'auto' and is_tag_combo_prompt(positive_prompt)):
         separators = [',', '，', ';', '；']
         parts = [positive_prompt] if positive_prompt else []
@@ -194,7 +195,6 @@ def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, 
         tag_names = [p.strip() for p in parts if p.strip()]
         save_tags_directly(card_id, tag_names)
     else:
-        # 其他模式：使用原有逻辑（手动标签 + 自动提取）
         manual_tags = []
         if tags:
             manual_tags = [t.strip() for t in tags.split(',') if t.strip()]
@@ -205,7 +205,7 @@ def create_card(title, positive_prompt, negative_prompt, tags, image_path=None, 
 
     return card_id
 
-def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, workflow_path=None, models=None, prompt_type='auto'):
+def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_path=None, thumbnail_path=None, workflow_path=None, models=None, prompt_type='auto'):
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -214,17 +214,19 @@ def update_card(card_id, title, positive_prompt, negative_prompt, tags, image_pa
         UPDATE cards
         SET title = ?, positive_prompt = ?, negative_prompt = ?, tags = ?,
             image_path = COALESCE(?, image_path),
+            thumbnail_path = COALESCE(?, thumbnail_path),
             workflow_path = COALESCE(?, workflow_path),
             models = COALESCE(?, models),
             prompt_type = COALESCE(?, prompt_type),
             updated_at = ?
         WHERE id = ?
-    ''', (title, positive_prompt, negative_prompt, tags, image_path, workflow_path, models_json, prompt_type, now, card_id))
+    ''', (title, positive_prompt, negative_prompt, tags, image_path, thumbnail_path, workflow_path, models_json, prompt_type, now, card_id))
     affected = cursor.rowcount
     conn.commit()
     conn.close()
 
     if affected and positive_prompt:
+        from backend.tag_extractor import is_tag_combo_prompt
         if prompt_type == 'tags' or (prompt_type == 'auto' and is_tag_combo_prompt(positive_prompt)):
             separators = [',', '，', ';', '；']
             parts = [positive_prompt]

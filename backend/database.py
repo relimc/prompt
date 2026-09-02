@@ -22,6 +22,7 @@ def init_db():
             positive_prompt TEXT NOT NULL,
             negative_prompt TEXT,
             image_path TEXT,
+            thumbnail_path TEXT,          -- 新增缩略图路径
             workflow_path TEXT,
             tags TEXT,
             models TEXT,
@@ -30,13 +31,15 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # 迁移：为 cards 表添加 prompt_type 字段（如果不存在）
+    # 迁移：为 cards 表添加缺失的字段
     cursor.execute("PRAGMA table_info(cards)")
     columns = [row[1] for row in cursor.fetchall()]
     if 'prompt_type' not in columns:
         cursor.execute('ALTER TABLE cards ADD COLUMN prompt_type TEXT DEFAULT "auto"')
     if 'models' not in columns:
         cursor.execute('ALTER TABLE cards ADD COLUMN models TEXT')
+    if 'thumbnail_path' not in columns:      # 新增迁移
+        cursor.execute('ALTER TABLE cards ADD COLUMN thumbnail_path TEXT')
 
     # 2. tags 表
     cursor.execute('''
@@ -59,7 +62,7 @@ def init_db():
         )
     ''')
 
-    # 4. model_links 表（含 description 字段）
+    # 4. model_links 表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS model_links (
             model_name TEXT PRIMARY KEY,
@@ -69,7 +72,6 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # 迁移：为 model_links 表添加 description 字段（如果不存在）
     cursor.execute("PRAGMA table_info(model_links)")
     columns = [row[1] for row in cursor.fetchall()]
     if 'description' not in columns:

@@ -22,3 +22,4 @@ class Config:
     IMAGE_DIR = os.path.join(DATA_DIR, "images")
     WORKFLOW_DIR = os.path.join(DATA_DIR, "workflows")
     LOG_DIR = os.path.join(BASE_DIR, "logs")
+    THUMBNAIL_DIR = os.path.join(DATA_DIR, "thumbnails")

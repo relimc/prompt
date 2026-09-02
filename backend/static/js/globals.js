@@ -90,6 +90,36 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// backend/static/js/globals.js
+
+// 懒加载函数
+function initLazyLoading() {
+    const lazyImages = document.querySelectorAll('img.lazy');
+    if ('IntersectionObserver' in window) {
+        const imageObserver = new IntersectionObserver((entries, observer) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    img.src = img.dataset.src;
+                    img.classList.remove('lazy');
+                    imageObserver.unobserve(img);
+                }
+            });
+        }, {
+            rootMargin: '0px 0px 200px 0px'
+        });
+        lazyImages.forEach(img => imageObserver.observe(img));
+    } else {
+        // 降级方案
+        lazyImages.forEach(img => {
+            img.src = img.dataset.src;
+            img.classList.remove('lazy');
+        });
+    }
+}
+
+// 暴露到全局
+window.initLazyLoading = initLazyLoading;
 // ---------- 暴露全局变量/函数 ----------
 window.showToast = showToast;
 window.copyText = copyText;

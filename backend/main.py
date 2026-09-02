@@ -10,6 +10,7 @@ from typing import Optional
 from typing import List
 from fastapi import Body
 from pydantic import BaseModel
+from PIL import Image
 
 from backend.config import Config
 from backend.database import init_db, get_db_connection
@@ -35,6 +36,7 @@ from backend.crud import update_card_models, delete_model_link
 os.makedirs(Config.IMAGE_DIR, exist_ok=True)
 os.makedirs(Config.WORKFLOW_DIR, exist_ok=True)
 os.makedirs(Config.LOG_DIR, exist_ok=True)
+os.makedirs(Config.THUMBNAIL_DIR, exist_ok=True) # 新增
 
 init_db()
 
@@ -120,12 +122,16 @@ def delete_card_endpoint(card_id: int):
     existing = get_card(card_id)
     if not existing:
         raise HTTPException(status_code=404, detail="卡片不存在")
-    # 删除关联文件
-    if existing["image_path"]:
+    # 删除关联文件：原图、缩略图、工作流
+    if existing.get("image_path"):
         path = os.path.join(Config.UPLOAD_DIR, existing["image_path"].lstrip("/uploads"))
         if os.path.exists(path):
             os.remove(path)
-    if existing["workflow_path"]:
+    if existing.get("thumbnail_path"):
+        thumb_path = os.path.join(Config.UPLOAD_DIR, existing["thumbnail_path"].lstrip("/uploads"))
+        if os.path.exists(thumb_path):
+            os.remove(thumb_path)
+    if existing.get("workflow_path"):
         path = os.path.join(Config.UPLOAD_DIR, existing["workflow_path"].lstrip("/uploads"))
         if os.path.exists(path):
             os.remove(path)
@@ -163,6 +169,34 @@ def delete_tag_endpoint(tag_id: int):
     if not success:
         raise HTTPException(status_code=404, detail="标签不存在")
     return {"message": "删除成功"}
+
+
+# backend/main.py
+
+from PIL import Image
+from backend.config import Config
+
+def generate_thumbnail(image_path: str, thumbnail_size: tuple = (400, 400)) -> str:
+    """生成图片缩略图，返回缩略图相对URL路径"""
+    try:
+        with Image.open(image_path) as img:
+            # 转换为RGB模式，避免PNG透明通道问题
+            if img.mode in ('RGBA', 'LA', 'P'):
+                img = img.convert('RGB')
+            # 生成缩略图，保持宽高比
+            img.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
+            # 构建缩略图存储路径
+            base_name = os.path.basename(image_path)
+            name, ext = os.path.splitext(base_name)
+            thumb_name = f"{name}_thumb.jpg"
+            thumb_path = os.path.join(Config.THUMBNAIL_DIR, thumb_name)
+            # 保存缩略图（JPEG格式，质量85%）
+            img.save(thumb_path, "JPEG", quality=85, optimize=True)
+            return f"/uploads/thumbnails/{thumb_name}"
+    except Exception as e:
+        logger.error(f"生成缩略图失败: {e}")
+        return None
+
 
 @app.post("/api/extract-prompt-from-image")
 async def extract_prompt_from_image(file: UploadFile = File(...)):
@@ -598,6 +632,7 @@ async def create_card_endpoint(
         raise HTTPException(status_code=400, detail="正向提示词不能为空")
 
     image_path = None
+    thumbnail_path = None
     workflow_path = None
     models = []
 
@@ -608,6 +643,8 @@ async def create_card_endpoint(
         with open(save_path, "wb") as f:
             shutil.copyfileobj(image.file, f)
         image_path = f"/uploads/images/{filename}"
+        # 生成缩略图
+        thumbnail_path = generate_thumbnail(save_path)
         models = extract_models_from_file_path(save_path)
 
     if workflow and workflow.filename:
@@ -624,6 +661,7 @@ async def create_card_endpoint(
         negative_prompt=negative_prompt,
         tags=tags,
         image_path=image_path,
+        thumbnail_path=thumbnail_path,
         workflow_path=workflow_path,
         models=models,
         prompt_type=prompt_type
@@ -649,20 +687,28 @@ async def update_card_endpoint(
         raise HTTPException(status_code=400, detail="正向提示词不能为空")
 
     image_path = existing.get("image_path")
+    thumbnail_path = existing.get("thumbnail_path")
     workflow_path = existing.get("workflow_path")
     models = None
 
     if image and image.filename:
+        # 删除旧图片和缩略图
         if existing.get("image_path"):
             old_path = os.path.join(Config.UPLOAD_DIR, existing["image_path"].lstrip("/uploads"))
             if os.path.exists(old_path):
                 os.remove(old_path)
+        if existing.get("thumbnail_path"):
+            old_thumb = os.path.join(Config.UPLOAD_DIR, existing["thumbnail_path"].lstrip("/uploads"))
+            if os.path.exists(old_thumb):
+                os.remove(old_thumb)
+
         ext = os.path.splitext(image.filename)[1]
         filename = f"img_{datetime.utcnow().timestamp()}{ext}"
         save_path = os.path.join(Config.IMAGE_DIR, filename)
         with open(save_path, "wb") as f:
             shutil.copyfileobj(image.file, f)
         image_path = f"/uploads/images/{filename}"
+        thumbnail_path = generate_thumbnail(save_path)
         models = extract_models_from_file_path(save_path)
 
     if workflow and workflow.filename:
@@ -684,6 +730,7 @@ async def update_card_endpoint(
         negative_prompt=negative_prompt,
         tags=tags,
         image_path=image_path,
+        thumbnail_path=thumbnail_path,
         workflow_path=workflow_path,
         models=models,
         prompt_type=prompt_type

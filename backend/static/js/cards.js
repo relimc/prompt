@@ -25,11 +25,12 @@ function renderCards(cards) {
     }
     let html = '';
     cards.forEach(card => {
-        const imgUrl = card.image_path || `https://picsum.photos/seed/${card.id}/400/300`;
+        // 优先使用缩略图，否则回退到原图或占位图
+        const imgUrl = card.thumbnail_path || card.image_path || `https://picsum.photos/seed/${card.id}/400/300`;
         html += `
             <div class="card" data-id="${card.id}">
                 <div class="card-image">
-                    <img src="${imgUrl}" alt="${card.title || '未命名'}" loading="lazy" onerror="this.src='https://picsum.photos/seed/${card.id}/400/300'" />
+                    <img class="lazy" data-src="${imgUrl}" alt="${card.title || '未命名'}" loading="lazy" onerror="this.src='https://picsum.photos/seed/${card.id}/400/300'" />
                 </div>
                 <div class="card-overlay">
                     <div class="card-actions">
@@ -47,6 +48,7 @@ function renderCards(cards) {
         window.scrollTo(0, waterfallScrollY);
     }
 
+    // 绑定按钮事件（原有逻辑）
     grid.querySelectorAll('.btn-models').forEach(btn => {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -54,6 +56,11 @@ function renderCards(cards) {
             handleModels(id);
         });
     });
+
+    // 初始化懒加载
+    if (typeof initLazyLoading === 'function') {
+        initLazyLoading();
+    }
 }
 
 // ---------- 工作流 & 提示词 ----------

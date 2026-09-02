@@ -915,3 +915,10 @@ body {
 .list-import-btn:hover {
     background: #cbd5e1;
 }
+/* 懒加载占位样式 */
+img.lazy {
+    background: #f0f2f5;
+    min-height: 100px;
+    width: 100%;
+    display: block;
+}
