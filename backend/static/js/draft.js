@@ -41,12 +41,10 @@ function showInfoTooltip(text, targetEl) {
     const rect = targetEl.getBoundingClientRect();
     let top = rect.bottom + 6;
     let left = rect.left + rect.width / 2 - tooltip.offsetWidth / 2;
-    // 防止溢出右边界
     if (left + tooltip.offsetWidth > window.innerWidth - 10) {
         left = window.innerWidth - tooltip.offsetWidth - 10;
     }
     if (left < 10) left = 10;
-    // 如果下方空间不足，显示在上方
     if (top + tooltip.offsetHeight > window.innerHeight - 10) {
         top = rect.top - tooltip.offsetHeight - 6;
     }
@@ -355,11 +353,24 @@ function initActionButtons() {
 
 // ---------- 小 i 悬浮提示 ----------
 function initInfoIcons() {
-    // 使用事件委托，不需要为每个元素单独绑定
-    document.removeEventListener('mouseenter', handleInfoIconEnter, true);
-    document.removeEventListener('mouseleave', handleInfoIconLeave, true);
-    document.addEventListener('mouseenter', handleInfoIconEnter, true);
-    document.addEventListener('mouseleave', handleInfoIconLeave, true);
+    document.querySelectorAll('.info-icon').forEach(el => {
+        // 移除旧监听（避免重复绑定）
+        el.removeEventListener('mouseenter', showInfo);
+        el.removeEventListener('mouseleave', hideInfo);
+        el.addEventListener('mouseenter', showInfo);
+        el.addEventListener('mouseleave', hideInfo);
+    });
+}
+
+function showInfo(e) {
+    const tip = this.dataset.tip || this.dataset.tooltip;
+    if (tip) {
+        showInfoTooltip(tip, this);
+    }
+}
+
+function hideInfo() {
+    hideInfoTooltip();
 }
 
 function handleInfoIconEnter(e) {
@@ -461,3 +472,6 @@ window.addTagList = addTagList;
 window.initDraft = initDraft;
 window.openListDrawer = openListDrawer;
 window.closeListDrawer = closeListDrawer;
+window.initInfoIcons = initInfoIcons;
+window.showInfoTooltip = showInfoTooltip;
+window.hideInfoTooltip = hideInfoTooltip;

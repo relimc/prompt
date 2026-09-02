@@ -673,10 +673,14 @@ function openEditModal(cardId) {
         return;
     }
     currentCardId = cardId;
-    editImagePreview.innerHTML = '';
-    editWorkflowPreview.innerHTML = '';
+    const editImagePreview = document.getElementById('editImagePreview');
+    const editWorkflowPreview = document.getElementById('editWorkflowPreview');
     const imageFileNameSpan = document.getElementById('imageFileName');
     const workflowFileNameSpan = document.getElementById('workflowFileName');
+    const editModal = document.getElementById('editModal');
+    const editModalTitle = document.getElementById('editModalTitle');
+    const editDeleteBtn = document.getElementById('editDeleteBtn');
+    const editForm = document.getElementById('editForm');
 
     if (cardId) {
         editModalTitle.textContent = '编辑卡片';
@@ -684,18 +688,23 @@ function openEditModal(cardId) {
         fetch(`/api/cards/${cardId}`)
             .then(res => res.json())
             .then(card => {
-                editTitle.value = card.title || '';
-                editPositive.value = card.positive_prompt;
-                editNegative.value = card.negative_prompt || '';
-                editTags.value = card.tags || '';
+                document.getElementById('editTitle').value = card.title || '';
+                document.getElementById('editPositive').value = card.positive_prompt;
+                document.getElementById('editNegative').value = card.negative_prompt || '';
+                document.getElementById('editTags').value = card.tags || '';
+                // 设置提示词模式
+                const promptTypeSelect = document.getElementById('editPromptType');
+                if (promptTypeSelect) {
+                    promptTypeSelect.value = card.prompt_type || 'auto';
+                }
 
                 if (card.image_path) {
                     const filename = card.image_path.split('/').pop();
                     imageFileNameSpan.textContent = filename;
-                    editImagePreview.innerHTML = `<button type="button" onclick="window.open('${card.image_path}', '_blank')" style="background:none; border:1px solid #6366f1; color:#6366f1; padding:4px 12px; border-radius:12px; cursor:pointer; font-size:0.9rem; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看文件</button>`;
+                    editImagePreview.innerHTML = `<button type="button" onclick="window.open('${card.image_path}', '_blank')" style="background:none; border:1px solid #6366f1; color:#6366f1; padding:4px 12px; border-radius:12px; cursor:pointer; font-size:0.9rem; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看原图</button>`;
                 } else {
                     imageFileNameSpan.textContent = '选择文件';
-                    editImagePreview.innerHTML = `<span style="border:1px solid #d1d5db; color:#d1d5db; padding:4px 12px; border-radius:12px; font-size:0.9rem; background:none; cursor:not-allowed; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看文件</span>`;
+                    editImagePreview.innerHTML = `<span style="border:1px solid #d1d5db; color:#d1d5db; padding:4px 12px; border-radius:12px; font-size:0.9rem; background:none; cursor:not-allowed; height:100%; box-sizing:border-box; display:flex; align-items:center;">查看原图</span>`;
                 }
 
                 if (card.workflow_path) {
@@ -708,6 +717,10 @@ function openEditModal(cardId) {
                 }
 
                 editModal.style.display = 'flex';
+                // 重新绑定 info-icon 事件（弹窗内的小i）
+                if (typeof initInfoIcons === 'function') {
+                    setTimeout(initInfoIcons, 50);
+                }
             })
             .catch(() => showToast('加载卡片失败'));
     } else {
@@ -719,6 +732,10 @@ function openEditModal(cardId) {
         editImagePreview.innerHTML = '';
         editWorkflowPreview.innerHTML = '';
         editModal.style.display = 'flex';
+        // 重新绑定 info-icon 事件（弹窗内的小i）
+        if (typeof initInfoIcons === 'function') {
+            setTimeout(initInfoIcons, 50);
+        }
     }
 }
 
@@ -988,7 +1005,6 @@ function initImageUpload() {
 }
 
 // ---------- 初始化 ----------
-// ---------- 初始化卡片模块 ----------
 function initCards() {
     // 取消按钮
     const cancelBtn = document.getElementById('editCancelBtn');
@@ -1004,6 +1020,16 @@ function initCards() {
     if (form) {
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
+
+            // ===== 新增：新增模式下图片必选 =====
+            if (!currentCardId) {
+                const imageInput = document.getElementById('editImage');
+                if (!imageInput || !imageInput.files || imageInput.files.length === 0) {
+                    showToast('⚠️ 新增卡片必须上传图片');
+                    return;
+                }
+            }
+
             if (!window.token && !localStorage.getItem('token')) {
                 openLoginModal(() => form.dispatchEvent(new Event('submit', { cancelable: true })));
                 return;
@@ -1031,14 +1057,10 @@ function initCards() {
                     showToast(currentCardId ? '更新成功' : '创建成功');
                     document.getElementById('editModal').style.display = 'none';
                     currentCardId = null;
-
-                    // 清空搜索框，确保显示所有卡片
                     if (searchInput) {
                         searchInput.value = '';
                         searchInput.dispatchEvent(new Event('input', { bubbles: true }));
                     }
-
-                    // 切换到瀑布流并加载
                     if (typeof switchView === 'function') {
                         switchView('waterfall');
                     } else {
@@ -1074,7 +1096,15 @@ function initCards() {
                     showToast('删除成功');
                     document.getElementById('editModal').style.display = 'none';
                     currentCardId = null;
-                    loadCards();
+                    if (searchInput) {
+                        searchInput.value = '';
+                        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                    if (typeof switchView === 'function') {
+                        switchView('waterfall');
+                    } else {
+                        loadCards();
+                    }
                 } else {
                     showToast('删除失败');
                 }
@@ -1084,11 +1114,95 @@ function initCards() {
         });
     }
 
-    // 图片上传提取
-    initImageUpload();
+    // ---------- 通用提取函数 ----------
+    async function handleFileExtract(file, extractUrl, typeLabel) {
+        const positiveInput = document.getElementById('editPositive');
+        const negativeInput = document.getElementById('editNegative');
+        if (positiveInput.value.trim() || negativeInput.value.trim()) {
+            if (!confirm('当前已有提示词，是否覆盖？')) {
+                return;
+            }
+        }
+
+        showToast(`正在提取${typeLabel}...`);
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await fetch(extractUrl, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.candidates && data.candidates.length > 0) {
+                    // 如果是 JSON 文件，预设类型为 json
+                    if (extractUrl === '/api/extract-prompt-from-json') {
+                        const typeSelect = document.getElementById('editPromptType');
+                        if (typeSelect) typeSelect.value = 'json';
+                    }
+                    showCandidateModal(data.candidates);
+                } else {
+                    showToast('⚠️ 未能提取到提示词，请手动输入');
+                }
+                if (data.models && data.models.length > 0) {
+                    console.log(`提取到模型: ${data.models.join(', ')}`);
+                }
+            } else {
+                let errMsg = '';
+                try {
+                    const err = await res.json();
+                    errMsg = err.detail || '';
+                } catch (_) {}
+                showToast('❌ 提取失败: ' + (errMsg || '未知错误'));
+            }
+        } catch (err) {
+            showToast('网络错误，请稍后重试');
+            console.error('请求异常:', err);
+        }
+    }
+
+    // ---------- 图片文件提取 ----------
+    const editImageInput = document.getElementById('editImage');
+    if (editImageInput) {
+        editImageInput.removeEventListener('change', handleImageChange);
+        editImageInput.addEventListener('change', handleImageChange);
+
+        function handleImageChange(e) {
+            const file = this.files[0];
+            const fileNameSpan = document.getElementById('imageFileName');
+            if (file) {
+                fileNameSpan.textContent = file.name;
+            } else {
+                fileNameSpan.textContent = '选择文件';
+            }
+            if (!file) return;
+            handleFileExtract(file, '/api/extract-prompt-from-image', '提示词');
+        }
+    }
+
+    // ---------- JSON 工作流文件提取 ----------
+    const editWorkflowInput = document.getElementById('editWorkflow');
+    if (editWorkflowInput) {
+        editWorkflowInput.removeEventListener('change', handleWorkflowChange);
+        editWorkflowInput.addEventListener('change', handleWorkflowChange);
+
+        function handleWorkflowChange(e) {
+            const file = this.files[0];
+            const fileNameSpan = document.getElementById('workflowFileName');
+            if (file) {
+                fileNameSpan.textContent = file.name;
+            } else {
+                fileNameSpan.textContent = '选择文件';
+            }
+            if (!file) return;
+            handleFileExtract(file, '/api/extract-prompt-from-json', 'JSON 工作流');
+        }
+    }
 
     // ===== 快捷键：Ctrl+Alt+P =====
-    // 移除旧监听，避免重复绑定
     document.removeEventListener('keydown', handleKeydown);
     document.addEventListener('keydown', handleKeydown);
 

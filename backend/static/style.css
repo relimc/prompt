@@ -113,7 +113,7 @@ body {
 .masonry {
     column-count: 4;
     column-gap: 20px;
-    padding-bottom: 10px;
+    padding: 10px 0;
     text-align: center;
 }
 @media (max-width: 1200px) { .masonry { column-count: 3; } }

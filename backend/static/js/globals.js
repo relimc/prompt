@@ -25,19 +25,20 @@ let _toastTimer = null;
 let _toastElement = null;
 
 function showToast(msg) {
-    // 如果已有 toast，直接更新内容和计时器
+    // 如果已存在 toast，更新内容并重置计时器
     if (_toastElement) {
         _toastElement.textContent = msg;
-        // 重置计时器
         clearTimeout(_toastTimer);
         _toastTimer = setTimeout(() => {
-            _toastElement.style.opacity = '0';
-            setTimeout(() => {
-                if (_toastElement && _toastElement.parentNode) {
-                    _toastElement.parentNode.removeChild(_toastElement);
-                    _toastElement = null;
-                }
-            }, 300);
+            if (_toastElement) {   // 添加空值判断
+                _toastElement.style.opacity = '0';
+                setTimeout(() => {
+                    if (_toastElement && _toastElement.parentNode) {
+                        _toastElement.parentNode.removeChild(_toastElement);
+                        _toastElement = null;
+                    }
+                }, 300);
+            }
         }, 4000);
         return;
     }
@@ -55,14 +56,17 @@ function showToast(msg) {
     document.body.appendChild(toast);
     _toastElement = toast;
     requestAnimationFrame(() => toast.style.opacity = '1');
+
     _toastTimer = setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-                _toastElement = null;
-            }
-        }, 300);
+        if (toast) {   // 使用局部变量，更安全
+            toast.style.opacity = '0';
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                    if (_toastElement === toast) _toastElement = null;
+                }
+            }, 300);
+        }
     }, 4000);
 }
 
