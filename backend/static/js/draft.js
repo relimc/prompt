@@ -355,23 +355,26 @@ function initActionButtons() {
 
 // ---------- 小 i 悬浮提示 ----------
 function initInfoIcons() {
-    document.querySelectorAll('.info-icon').forEach(el => {
-        el.removeEventListener('mouseenter', showInfo);
-        el.removeEventListener('mouseleave', hideInfo);
-        el.addEventListener('mouseenter', showInfo);
-        el.addEventListener('mouseleave', hideInfo);
-    });
+    // 使用事件委托，不需要为每个元素单独绑定
+    document.removeEventListener('mouseenter', handleInfoIconEnter, true);
+    document.removeEventListener('mouseleave', handleInfoIconLeave, true);
+    document.addEventListener('mouseenter', handleInfoIconEnter, true);
+    document.addEventListener('mouseleave', handleInfoIconLeave, true);
+}
 
-    function showInfo(e) {
-        const tip = this.dataset.tip;
-        if (tip) {
-            showInfoTooltip(tip, this);
-        }
+function handleInfoIconEnter(e) {
+    const el = e.target.closest('.info-icon');
+    if (!el) return;
+    const tip = el.dataset.tooltip || el.dataset.tip; // 兼容两种属性
+    if (tip) {
+        showInfoTooltip(tip, el);
     }
+}
 
-    function hideInfo() {
-        hideInfoTooltip();
-    }
+function handleInfoIconLeave(e) {
+    const el = e.target.closest('.info-icon');
+    if (!el) return;
+    hideInfoTooltip();
 }
 
 // ---------- 初始化 ----------
