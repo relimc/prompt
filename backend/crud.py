@@ -286,7 +286,8 @@ def get_all_tags_with_stats():
     cursor = conn.cursor()
     cursor.execute('''
         SELECT t.id, t.name, t.usage_count,
-               GROUP_CONCAT(DISTINCT c.image_path) as image_paths
+               GROUP_CONCAT(DISTINCT c.image_path) as image_paths,
+               GROUP_CONCAT(DISTINCT c.thumbnail_path) as thumb_paths
         FROM tags t
         LEFT JOIN card_tags ct ON t.id = ct.tag_id
         LEFT JOIN cards c ON ct.card_id = c.id
@@ -299,15 +300,17 @@ def get_all_tags_with_stats():
     result = []
     for row in rows:
         item = dict(row)
-        if item['image_paths']:
-            paths = [p for p in item['image_paths'].split(',') if p]
-            item['images'] = paths
+        thumb_paths = item.get('thumb_paths')
+        image_paths = item.get('image_paths')
+        if thumb_paths:
+            paths = [p for p in thumb_paths.split(',') if p]
         else:
-            item['images'] = []
+            paths = [p for p in image_paths.split(',') if p] if image_paths else []
+        item['images'] = paths
         del item['image_paths']
+        del item['thumb_paths']
         result.append(item)
     return result
-
 
 def delete_tag(tag_id: int):
     # 先获取标签名称
@@ -338,7 +341,6 @@ def delete_tag(tag_id: int):
 
 
 def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
-    """获取标签列表（分页），支持关键词搜索，过滤 usage_count=0 的标签"""
     conn = get_db_connection()
     cursor = conn.cursor()
     where_clause = "WHERE t.usage_count > 0"
@@ -347,7 +349,6 @@ def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
         where_clause += " AND t.name LIKE ?"
         params.append(f"%{keyword}%")
 
-    # 总数
     count_sql = f"SELECT COUNT(DISTINCT t.id) as total FROM tags t {where_clause}"
     cursor.execute(count_sql, params)
     total = cursor.fetchone()['total']
@@ -359,7 +360,8 @@ def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
     offset = (page - 1) * per_page
     sql = f"""
         SELECT t.id, t.name, t.usage_count,
-               GROUP_CONCAT(DISTINCT c.image_path) as image_paths
+               GROUP_CONCAT(DISTINCT c.image_path) as image_paths,
+               GROUP_CONCAT(DISTINCT c.thumbnail_path) as thumb_paths
         FROM tags t
         LEFT JOIN card_tags ct ON t.id = ct.tag_id
         LEFT JOIN cards c ON ct.card_id = c.id
@@ -376,14 +378,16 @@ def get_tags_paginated(keyword: str = "", page: int = 1, per_page: int = 72):
     result = []
     for row in rows:
         item = dict(row)
-        # 安全处理 image_paths
-        if item.get('image_paths'):
-            paths = [p for p in item['image_paths'].split(',') if p]
-            item['images'] = paths
+        # 优先使用缩略图，如果缩略图不存在则使用原图
+        thumb_paths = item.get('thumb_paths')
+        image_paths = item.get('image_paths')
+        if thumb_paths:
+            paths = [p for p in thumb_paths.split(',') if p]
         else:
-            item['images'] = []
-        # 删除原始字段，避免冲突
+            paths = [p for p in image_paths.split(',') if p] if image_paths else []
+        item['images'] = paths
         del item['image_paths']
+        del item['thumb_paths']
         result.append(item)
     return result, total
 

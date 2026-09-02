@@ -218,12 +218,12 @@ function openPromptModal(card) {
     modalBody.innerHTML = `
         <div class="prompt-block">
             <div class="label positive">✅ 正向提示词</div>
-            <div class="content">${positiveDisplay}</div>
+            <div class="content" style="white-space: pre-wrap;">${positiveDisplay}</div>
             <button class="copy-prompt-btn" data-text="${positiveAttr}">复制正向词</button>
         </div>
         <div class="prompt-block">
             <div class="label negative">🚫 反向提示词</div>
-            <div class="content">${negativeDisplay}</div>
+            <div class="content" style="white-space: pre-wrap;">${negativeDisplay}</div>
             <button class="copy-prompt-btn" data-text="${negativeAttr}">复制反向词</button>
         </div>
         <div style="margin-top:12px; display:flex; gap:10px; justify-content:flex-end;">

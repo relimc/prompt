@@ -176,7 +176,7 @@ def delete_tag_endpoint(tag_id: int):
 from PIL import Image
 from backend.config import Config
 
-def generate_thumbnail(image_path: str, thumbnail_size: tuple = (400, 400)) -> str:
+def generate_thumbnail(image_path: str, thumbnail_size: tuple = (600, 600)) -> str:
     """生成图片缩略图，返回缩略图相对URL路径"""
     try:
         with Image.open(image_path) as img:
