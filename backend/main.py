@@ -530,8 +530,6 @@ async def create_card_endpoint(
 ):
     if not positive_prompt:
         raise HTTPException(status_code=400, detail="正向提示词不能为空")
-
-    # ===== 新增：图片必选校验 =====
     if not image or not image.filename:
         raise HTTPException(status_code=400, detail="必须上传图片文件")
 
@@ -540,7 +538,7 @@ async def create_card_endpoint(
     workflow_path = None
     models = []
 
-    # 保存图片（已有的逻辑）
+    # 处理图片
     if image and image.filename:
         ext = os.path.splitext(image.filename)[1]
         filename = f"img_{datetime.utcnow().timestamp()}{ext}"
@@ -551,14 +549,26 @@ async def create_card_endpoint(
         thumbnail_path = generate_thumbnail(save_path)
         models = extract_models_from_file_path(save_path)
 
-    # 工作流处理（保持不变）
+        # ---------- 自动提取工作流 JSON ----------
+        workflow_data = extract_workflow_from_image(save_path)
+        if workflow_data:
+            workflow_path = save_workflow_json_from_data(workflow_data, filename)
+            logger.info(f"从图片自动提取并保存工作流 JSON: {workflow_path}")
+
+    # 如果用户上传了 JSON 文件，则覆盖自动提取的
     if workflow and workflow.filename:
+        # 删除之前可能自动生成的 JSON 文件（如果有）
+        if workflow_path:
+            old_path = os.path.join(Config.UPLOAD_DIR, workflow_path.lstrip("/uploads"))
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        # 保存用户上传的 JSON
         ext = os.path.splitext(workflow.filename)[1]
-        filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
-        save_path = os.path.join(Config.WORKFLOW_DIR, filename)
-        with open(save_path, "wb") as f:
+        wf_filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
+        wf_save_path = os.path.join(Config.WORKFLOW_DIR, wf_filename)
+        with open(wf_save_path, "wb") as f:
             shutil.copyfileobj(workflow.file, f)
-        workflow_path = f"/uploads/workflows/{filename}"
+        workflow_path = f"/uploads/workflows/{wf_filename}"
 
     card_id = create_card(
         title=title,
@@ -596,8 +606,9 @@ async def update_card_endpoint(
     workflow_path = existing.get("workflow_path")
     models = None
 
+    # 如果用户上传了新图片，处理新图片
     if image and image.filename:
-        # 删除旧图片和缩略图
+        # 删除旧图片和缩略图（如有）
         if existing.get("image_path"):
             old_path = os.path.join(Config.UPLOAD_DIR, existing["image_path"].lstrip("/uploads"))
             if os.path.exists(old_path):
@@ -616,17 +627,36 @@ async def update_card_endpoint(
         thumbnail_path = generate_thumbnail(save_path)
         models = extract_models_from_file_path(save_path)
 
+        # ---------- 自动提取工作流 JSON（覆盖旧的） ----------
+        # 先删除旧的工作流文件（如果之前有）
+        if workflow_path:
+            old_wf = os.path.join(Config.UPLOAD_DIR, workflow_path.lstrip("/uploads"))
+            if os.path.exists(old_wf):
+                os.remove(old_wf)
+                workflow_path = None  # 清空，后续重新设置
+
+        # 从新图片提取工作流
+        workflow_data = extract_workflow_from_image(save_path)
+        if workflow_data:
+            workflow_path = save_workflow_json_from_data(workflow_data, filename)
+            logger.info(f"从新图片更新工作流 JSON: {workflow_path}")
+
+    # 如果用户上传了 JSON 文件，则优先使用用户提供的（覆盖自动提取的）
     if workflow and workflow.filename:
-        if existing.get("workflow_path"):
-            old_path = os.path.join(Config.UPLOAD_DIR, existing["workflow_path"].lstrip("/uploads"))
-            if os.path.exists(old_path):
-                os.remove(old_path)
+        # 删除之前可能存在的任何工作流文件（无论自动提取或旧用户上传）
+        if workflow_path:
+            old_wf = os.path.join(Config.UPLOAD_DIR, workflow_path.lstrip("/uploads"))
+            if os.path.exists(old_wf):
+                os.remove(old_wf)
+        # 保存用户上传的 JSON
         ext = os.path.splitext(workflow.filename)[1]
-        filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
-        save_path = os.path.join(Config.WORKFLOW_DIR, filename)
-        with open(save_path, "wb") as f:
+        wf_filename = f"wf_{datetime.utcnow().timestamp()}{ext}"
+        wf_save_path = os.path.join(Config.WORKFLOW_DIR, wf_filename)
+        with open(wf_save_path, "wb") as f:
             shutil.copyfileobj(workflow.file, f)
-        workflow_path = f"/uploads/workflows/{filename}"
+        workflow_path = f"/uploads/workflows/{wf_filename}"
+
+    # 如果用户没有上传新图片，也没有上传 JSON 文件，但之前有工作流文件，保留不变（无需操作）
 
     success = update_card(
         card_id=card_id,
@@ -763,3 +793,39 @@ def remove_stopword_endpoint(keyword: str):
     remove_stopword(keyword)
     refresh_stopwords()
     return {"message": "移除成功"}
+
+def extract_workflow_from_image(image_path: str) -> Optional[str]:
+    """
+    从图片文件中提取工作流 JSON 字符串，若无则返回 None。
+    """
+    try:
+        from PIL import Image
+        img = Image.open(image_path)
+        workflow_data = img.info.get('workflow') or img.info.get('prompt')
+        if workflow_data:
+            # 验证是否为有效 JSON
+            json.loads(workflow_data)
+            return workflow_data
+        return None
+    except Exception as e:
+        logger.warning(f"提取图片工作流失败: {e}")
+        return None
+
+def save_workflow_json_from_data(workflow_data: str, base_filename: str) -> Optional[str]:
+    """
+    将工作流 JSON 字符串保存为文件，返回相对路径。
+    base_filename: 用于命名的基础文件名（例如 img_1234567890.png）
+    """
+    try:
+        # 确保是有效的 JSON
+        json.loads(workflow_data)
+        # 生成文件名：取原文件名（不含扩展名），加上 .json
+        base = os.path.splitext(base_filename)[0]
+        json_filename = f"{base}.json"
+        json_path = os.path.join(Config.WORKFLOW_DIR, json_filename)
+        with open(json_path, 'w', encoding='utf-8') as f:
+            f.write(workflow_data)
+        return f"/uploads/workflows/{json_filename}"
+    except Exception as e:
+        logger.error(f"保存工作流 JSON 失败: {e}")
+        return None

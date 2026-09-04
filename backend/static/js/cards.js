@@ -1116,11 +1116,12 @@ function initCards() {
 
     // ---------- 通用提取函数 ----------
     async function handleFileExtract(file, extractUrl, typeLabel) {
+        // 检查是否已有提示词
         const positiveInput = document.getElementById('editPositive');
         const negativeInput = document.getElementById('editNegative');
         if (positiveInput.value.trim() || negativeInput.value.trim()) {
             if (!confirm('当前已有提示词，是否覆盖？')) {
-                return;
+                return; // 用户取消
             }
         }
 
@@ -1137,6 +1138,10 @@ function initCards() {
 
             if (res.ok) {
                 const data = await res.json();
+                // 如果是图片提取，提示工作流已自动提取
+                if (extractUrl === '/api/extract-prompt-from-image') {
+                    showToast('✅ 已提取工作流，将自动生成 JSON 文件');
+                }
                 if (data.candidates && data.candidates.length > 0) {
                     // 如果是 JSON 文件，预设类型为 json
                     if (extractUrl === '/api/extract-prompt-from-json') {
@@ -1147,6 +1152,7 @@ function initCards() {
                 } else {
                     showToast('⚠️ 未能提取到提示词，请手动输入');
                 }
+                // 如果有模型，自动保存已在后端完成
                 if (data.models && data.models.length > 0) {
                     console.log(`提取到模型: ${data.models.join(', ')}`);
                 }
